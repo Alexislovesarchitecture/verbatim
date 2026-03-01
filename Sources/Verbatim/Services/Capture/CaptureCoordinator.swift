@@ -445,8 +445,10 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
             return "Local whisper server endpoint is unavailable."
         case .serverTimeout:
             return "Local whisper server did not start in time."
-        case .invalidResponse, .requestFailed:
-            return "Failed to initialize transcription."
+        case .invalidResponse:
+            return "Transcription response format was invalid."
+        case .requestFailed(let reason):
+            return reason.isEmpty ? "Request failed." : reason
         case .emptyTranscript:
             return "Transcription was empty."
         }
