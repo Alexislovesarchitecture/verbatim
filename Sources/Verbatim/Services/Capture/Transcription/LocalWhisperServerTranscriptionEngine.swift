@@ -19,17 +19,18 @@ final class LocalWhisperServerTranscriptionEngine: TranscriptionEngineProtocol {
     }
 
     func transcribe(fileURL: URL, prompt: String?, language: String) async throws -> String {
-        let modelId = modelManager.normalizeModelId(settings.whisperModelId)
-        guard modelManager.isModelDownloaded(modelId, modelsDirectory: settings.whisperModelsDir) else {
+        let modelId = modelManager.normalizeModelId(settings.whisperModelId ?? WhisperLocalModel.defaultId.rawValue)
+        let modelsDirectory = settings.whisperModelsDir ?? WhisperModelDirectory.defaultPath
+        guard modelManager.isModelDownloaded(modelId, modelsDirectory: modelsDirectory) else {
             throw TranscriptionEngineError.missingModel
         }
 
-        let model = modelManager.modelPath(for: modelId, modelsDirectory: settings.whisperModelsDir)
+        let model = modelManager.modelPath(for: modelId, modelsDirectory: modelsDirectory)
         let binaryPath = try await serverManager.ensureServerBinaryPath(overridePath: settings.whisperCppPath)
         let serverURL = try await serverManager.ensureServerRunning(
             modelPath: model.path,
             binaryPath: binaryPath,
-            config: .init(threads: max(1, settings.whisperLocalThreads), language: language.isEmpty ? "auto" : language)
+            config: .init(threads: max(1, settings.whisperLocalThreads ?? 4), language: language.isEmpty ? "auto" : language)
         )
 
         let transcript = try await client.transcribe(

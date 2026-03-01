@@ -210,15 +210,15 @@ final class AppSettings {
     var silenceThreshold: Float
 
     var provider: TranscriptionProvider
-    var openAIModel: OpenAITranscriptionModel
+    var openAIModel: OpenAITranscriptionModel?
     var openAIKeyRef: String
     var whisperCppPath: String
     var whisperModelPath: String
-    var whisperBackend: WhisperLocalBackend
-    var whisperModelId: String
-    var whisperModelsDir: String
-    var whisperServerAutoStart: Bool
-    var whisperLocalThreads: Int
+    var whisperBackend: WhisperLocalBackend?
+    var whisperModelId: String?
+    var whisperModelsDir: String?
+    var whisperServerAutoStart: Bool?
+    var whisperLocalThreads: Int?
     var language: String
 
     var autoInsertEnabled: Bool
@@ -238,15 +238,15 @@ final class AppSettings {
         overlayMeterEnabled: Bool = true,
         silenceThreshold: Float = 0.06,
         provider: TranscriptionProvider = .openai,
-        openAIModel: OpenAITranscriptionModel = .gpt4oMiniTranscribe,
+        openAIModel: OpenAITranscriptionModel? = .gpt4oMiniTranscribe,
         openAIKeyRef: String = "",
         whisperCppPath: String = "",
         whisperModelPath: String = "",
-        whisperBackend: WhisperLocalBackend = .server,
-        whisperModelId: String = WhisperLocalModel.defaultId.rawValue,
-        whisperModelsDir: String = WhisperModelDirectory.defaultPath,
-        whisperServerAutoStart: Bool = true,
-        whisperLocalThreads: Int = 4,
+        whisperBackend: WhisperLocalBackend? = .server,
+        whisperModelId: String? = WhisperLocalModel.defaultId.rawValue,
+        whisperModelsDir: String? = WhisperModelDirectory.defaultPath,
+        whisperServerAutoStart: Bool? = true,
+        whisperLocalThreads: Int? = 4,
         language: String = "en",
         autoInsertEnabled: Bool = true,
         clipboardFallbackEnabled: Bool = true,

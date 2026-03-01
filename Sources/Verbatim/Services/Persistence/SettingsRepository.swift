@@ -51,19 +51,29 @@ final class SwiftDataSettingsRepository: SettingsRepository {
     }
 
     private func normalizeIfNeeded(_ settings: AppSettings) {
-        settings.whisperModelId = WhisperModelCatalog.normalizedModelId(settings.whisperModelId)
+        settings.openAIModel = settings.openAIModel ?? .gpt4oMiniTranscribe
+        settings.whisperModelId = WhisperModelCatalog.normalizedModelId(settings.whisperModelId ?? WhisperLocalModel.defaultId.rawValue)
 
-        if settings.whisperModelsDir.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let cleanedModelsDir = settings.whisperModelsDir?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if cleanedModelsDir.isEmpty {
             settings.whisperModelsDir = WhisperModelDirectory.defaultPath
+        } else {
+            settings.whisperModelsDir = cleanedModelsDir
         }
 
-        if settings.whisperLocalThreads <= 0 {
+        if (settings.whisperLocalThreads ?? 0) <= 0 {
             settings.whisperLocalThreads = 4
         }
 
         if settings.whisperCppPath == "/opt/homebrew/bin/whisper-cli",
            !FileManager.default.fileExists(atPath: "/opt/homebrew/bin/whisper-cli") {
             settings.whisperCppPath = ""
+        }
+
+        settings.whisperServerAutoStart = settings.whisperServerAutoStart ?? true
+
+        if settings.whisperBackend == nil {
+            settings.whisperBackend = .server
         }
 
         if settings.whisperModelPath.isEmpty {
