@@ -161,6 +161,22 @@ enum TranscriptionProvider: String, Codable, CaseIterable, Identifiable {
     var title: String { rawValue == "openai" ? "OpenAI" : "whisper.cpp" }
 }
 
+enum OpenAITranscriptionModel: String, Codable, CaseIterable, Identifiable {
+    case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
+    case gpt4oTranscribe = "gpt-4o-transcribe"
+    case gpt4oTranscribeDiarize = "gpt-4o-transcribe-diarize"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .gpt4oMiniTranscribe: return "gpt-4o-mini-transcribe"
+        case .gpt4oTranscribe: return "gpt-4o-transcribe"
+        case .gpt4oTranscribeDiarize: return "gpt-4o-transcribe-diarize"
+        }
+    }
+}
+
 enum InsertionModePreferred: String, Codable, CaseIterable, Identifiable {
     case accessibilityFirst
     case pasteOnly

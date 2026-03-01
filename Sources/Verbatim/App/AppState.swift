@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AVFoundation
 
 @MainActor
 final class AppState: ObservableObject {
@@ -12,6 +13,7 @@ final class AppState: ObservableObject {
     let settingsRepository: SettingsRepository
 
     let coordinator: CaptureCoordinator
+    private let insertionService: TextInsertionServicing
 
     lazy var homeViewModel = HomeViewModel(
         captureRepository: captureRepository,
@@ -38,6 +40,7 @@ final class AppState: ObservableObject {
         styleRepository.ensureDefaults()
 
         let insertionService = TextInsertionService()
+        self.insertionService = insertionService
         insertionService.requestAccessibilityIfNeeded()
 
         self.coordinator = CaptureCoordinator(
@@ -52,16 +55,22 @@ final class AppState: ObservableObject {
             noteRepository: noteRepository,
             settingsRepository: settingsRepository,
             keyStore: OpenAIKeyStore()
-        ) { [weak self] in
-            self?.homeViewModel.refresh()
-        }
+        )
     }
 
     func startRuntimeServices() {
+        requestPermissions()
         coordinator.startListeningMonitoring()
     }
 
     func stopRuntimeServices() {
         coordinator.stopListeningMonitoring()
+    }
+
+    private func requestPermissions() {
+        insertionService.requestAccessibilityIfNeeded()
+        Task {
+            _ = await AVCaptureDevice.requestAccess(for: .audio)
+        }
     }
 }

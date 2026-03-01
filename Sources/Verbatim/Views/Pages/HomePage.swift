@@ -61,10 +61,11 @@ struct HomePage: View {
 
                         HStack {
                             Text("History retention")
-                            Stepper(value: Binding(
+                            Stepper("", value: Binding(
                                 get: { viewModel.historyRetentionDays },
                                 set: viewModel.setHistoryRetentionDays
                             ), in: 1...365)
+                            .labelsHidden()
                             Text("\(viewModel.historyRetentionDays) days")
                                 .foregroundStyle(.secondary)
                         }
@@ -128,7 +129,7 @@ struct HomePage: View {
 
     private func captureCard(_ capture: CaptureRecord) -> some View {
         let isExpanded = viewModel.expandedRecordIds.contains(capture.id)
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             Button {
                 viewModel.toggleExpanded(capture.id)
             } label: {
@@ -198,7 +199,7 @@ struct HomePage: View {
                         Text("Engine: \(capture.engineUsed.title)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("Locked: \(capture.wasLockedMode ? \"yes\" : \"no\")")
+                        Text("Locked: \(capture.wasLockedMode ? "yes" : "no")")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

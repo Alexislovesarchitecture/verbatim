@@ -31,6 +31,12 @@ struct SettingsPage: View {
                     }
                 }
 
+                Picker("OpenAI model", selection: $viewModel.openAIModel) {
+                    ForEach(OpenAITranscriptionModel.allCases) { model in
+                        Text(model.title).tag(model)
+                    }
+                }
+
                 SecureField("OpenAI API key", text: $viewModel.openAIKeyInput)
                     .textContentType(.password)
                     .autocorrectionDisabled()

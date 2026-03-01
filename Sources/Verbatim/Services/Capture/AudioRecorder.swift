@@ -58,7 +58,7 @@ final class AudioRecorder {
         }
     }
 
-    var wasSilentThreshold(_ threshold: Float) -> Bool {
+    func wasSilentThreshold(_ threshold: Float) -> Bool {
         maxLevelObserved < threshold
     }
 

@@ -4,6 +4,7 @@ import SwiftData
 @MainActor
 final class PersistenceController {
     static let shared = PersistenceController()
+    private let keyStore = OpenAIKeyStore()
 
     let modelContainer: ModelContainer
     var modelContext: ModelContext { modelContainer.mainContext }
@@ -142,6 +143,7 @@ final class PersistenceController {
 
     private func applyLegacySettings(_ legacy: LegacySettings, to settings: AppSettings) {
         settings.provider = legacy.provider
+        settings.openAIModel = OpenAITranscriptionModel(rawValue: legacy.openAIModel) ?? .gpt4oMiniTranscribe
         settings.language = legacy.languageCode
         settings.autoInsertEnabled = legacy.autoInsert
         settings.clipboardFallbackEnabled = legacy.autoPasteFallback
@@ -150,7 +152,17 @@ final class PersistenceController {
         settings.stopSoundEnabled = true
         settings.doubleTapFnLockEnabled = true
         settings.overlayMeterEnabled = true
-        settings.openAIKeyRef = legacy.openAIAPIKey.isEmpty ? "" : "openai-key"
+        let trimmedKey = legacy.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedKey.isEmpty {
+            settings.openAIKeyRef = ""
+        } else {
+            settings.openAIKeyRef = "openai-api-key"
+            do {
+                try keyStore.save(trimmedKey)
+            } catch {
+                print("Failed to restore legacy OpenAI key: \(error)")
+            }
+        }
         settings.whisperCppPath = legacy.whisperCLIPath
         settings.whisperModelPath = legacy.whisperModelPath
     }

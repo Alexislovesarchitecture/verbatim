@@ -139,18 +139,18 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
             onRecordingSaved?()
         }
 
-        guard let url = rawAudioURL else {
-            currentState = .failed
-            uiState = .error
-            addFailedCapture(raw: "", formatted: "", status: .failed, errorMessage: "No captured audio")
-            return
-        }
+        let url = rawAudioURL
+        let settings = settingsRepository.settings()
+        let behavior = settingsRepository.behaviorSettings()
 
         guard let transcriptionEngine = await buildTranscriptionEngine() else {
             currentState = .failed
             uiState = .error
-            overlay.show(state: .error, level: 0, message: "No transcription engine configured")
-            addFailedCapture(raw: "", formatted: "", status: .failed, errorMessage: "No transcription engine configured")
+            let message = settings.provider == .openai
+                ? "No transcription engine configured. Add an OpenAI key in Settings."
+                : "No transcription engine configured. Check whisper.cpp path/model in Settings."
+            overlay.show(state: .error, level: 0, message: message)
+            addFailedCapture(raw: "", formatted: "", status: .failed, errorMessage: message)
             return
         }
 
@@ -158,8 +158,6 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         uiState = .transcribing
         overlay.show(state: .transcribing, level: 0.9, message: "Transcribing")
 
-        let settings = settingsRepository.settings()
-        let behavior = settingsRepository.behaviorSettings()
         let category = insertionService.inferStyleCategory()
         let styleProfile = styleRepository.profile(for: category) ?? StyleProfile(category: category)
         let engineUsed = settings.provider == .openai ? EngineUsed.openai : .whispercpp
@@ -243,7 +241,8 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         } catch {
             currentState = .failed
             uiState = .error
-            let status = settings.autoInsertEnabled ? .failed : .failed
+            print("Transcription failed: \(error)")
+            let status: CaptureStatus = .failed
             addFailedCapture(raw: "", formatted: "", status: status, errorMessage: error.localizedDescription)
             overlay.show(state: .error, level: 0, message: error.localizedDescription)
         }
@@ -301,7 +300,7 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         let dictionaryTerms = dictionaryRepository
             .all(scope: nil)
             .filter { $0.enabled && !$0.output.isNilOrEmpty }
-            .map { "\($0.input)=\($0.output ?? \"\")" }
+            .map { "\($0.input)=\($0.output ?? "")" }
             .joined(separator: ", ")
         return dictionaryTerms.isEmpty ? "" : "Prefer these terms: \(dictionaryTerms)"
     }
@@ -310,8 +309,17 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         let settings = settingsRepository.settings()
         switch settings.provider {
         case .openai:
-            guard let key = try? keyStore.load(), !key.isEmpty else { return nil }
-            return OpenAITranscriptionEngine(apiKey: key)
+            do {
+                guard let key = try keyStore.load()?.trimmingCharacters(in: .whitespacesAndNewlines),
+                      !key.isEmpty else {
+                    print("OpenAI engine not configured: no API key found in keychain.")
+                    return nil
+                }
+                return OpenAITranscriptionEngine(apiKey: key, model: settings.openAIModel.rawValue)
+            } catch {
+                print("OpenAI engine not configured: failed reading keychain (\(error))")
+                return nil
+            }
         case .whispercpp:
             return WhisperCppTranscriptionEngine(
                 cliPath: settings.whisperCppPath,

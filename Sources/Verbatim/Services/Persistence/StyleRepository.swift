@@ -20,7 +20,7 @@ final class SwiftDataStyleRepository: StyleRepository {
     }
 
     func upsert(_ profile: StyleProfile) {
-        let existing = profile(for: profile.category)
+        let existing = self.profile(for: profile.category)
         if let existing {
             existing.tone = profile.tone
             existing.capsMode = profile.capsMode

@@ -37,17 +37,7 @@ final class SwiftDataDictionaryRepository: DictionaryRepository {
     private func applyFilters(query: String?, scope: DictionaryScope?) -> [DictionaryEntry] {
         let predicate: Predicate<DictionaryEntry>?
         if let scope {
-            if let query, !query.isEmpty {
-                predicate = #Predicate<DictionaryEntry> {
-                    $0.scope == scope && ($0.input.lowercased().contains(query) || ($0.output?.lowercased().contains(query) ?? false))
-                }
-            } else {
-                predicate = #Predicate<DictionaryEntry> { $0.scope == scope }
-            }
-        } else if let query, !query.isEmpty {
-            predicate = #Predicate<DictionaryEntry> {
-                $0.input.lowercased().contains(query) || ($0.output?.lowercased().contains(query) ?? false)
-            }
+            predicate = #Predicate<DictionaryEntry> { $0.scope == scope }
         } else {
             predicate = nil
         }
@@ -56,7 +46,15 @@ final class SwiftDataDictionaryRepository: DictionaryRepository {
             predicate: predicate,
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        let all = (try? context.fetch(descriptor)) ?? []
+
+        guard let query, !query.isEmpty else {
+            return all
+        }
+
+        return all.filter {
+            $0.input.lowercased().contains(query) || ($0.output?.lowercased().contains(query) ?? false)
+        }
     }
 
     private func save() {

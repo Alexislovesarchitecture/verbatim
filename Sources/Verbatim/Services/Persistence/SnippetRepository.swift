@@ -37,17 +37,7 @@ final class SwiftDataSnippetRepository: SnippetRepository {
     private func applyFilters(query: String?, scope: SnippetScope?) -> [SnippetEntry] {
         let predicate: Predicate<SnippetEntry>?
         if let scope {
-            if let query, !query.isEmpty {
-                predicate = #Predicate<SnippetEntry> {
-                    $0.scope == scope && ($0.trigger.lowercased().contains(query) || $0.content.lowercased().contains(query))
-                }
-            } else {
-                predicate = #Predicate<SnippetEntry> { $0.scope == scope }
-            }
-        } else if let query, !query.isEmpty {
-            predicate = #Predicate<SnippetEntry> {
-                $0.trigger.lowercased().contains(query) || $0.content.lowercased().contains(query)
-            }
+            predicate = #Predicate<SnippetEntry> { $0.scope == scope }
         } else {
             predicate = nil
         }
@@ -56,7 +46,15 @@ final class SwiftDataSnippetRepository: SnippetRepository {
             predicate: predicate,
             sortBy: [SortDescriptor(\.updatedAt, order: .reverse)]
         )
-        return (try? context.fetch(descriptor)) ?? []
+        let all = (try? context.fetch(descriptor)) ?? []
+
+        guard let query, !query.isEmpty else {
+            return all
+        }
+
+        return all.filter {
+            $0.trigger.lowercased().contains(query) || $0.content.lowercased().contains(query)
+        }
     }
 
     private func save() {

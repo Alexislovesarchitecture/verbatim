@@ -210,6 +210,7 @@ final class AppSettings {
     var silenceThreshold: Float
 
     var provider: TranscriptionProvider
+    var openAIModel: OpenAITranscriptionModel
     var openAIKeyRef: String
     var whisperCppPath: String
     var whisperModelPath: String
@@ -232,6 +233,7 @@ final class AppSettings {
         overlayMeterEnabled: Bool = true,
         silenceThreshold: Float = 0.06,
         provider: TranscriptionProvider = .openai,
+        openAIModel: OpenAITranscriptionModel = .gpt4oMiniTranscribe,
         openAIKeyRef: String = "",
         whisperCppPath: String = "/opt/homebrew/bin/whisper-cli",
         whisperModelPath: String = "",
@@ -251,6 +253,7 @@ final class AppSettings {
         self.overlayMeterEnabled = overlayMeterEnabled
         self.silenceThreshold = silenceThreshold
         self.provider = provider
+        self.openAIModel = openAIModel
         self.openAIKeyRef = openAIKeyRef
         self.whisperCppPath = whisperCppPath
         self.whisperModelPath = whisperModelPath

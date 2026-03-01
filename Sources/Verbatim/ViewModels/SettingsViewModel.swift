@@ -9,6 +9,7 @@ final class SettingsViewModel: ObservableObject {
     @Published var silenceThreshold: Float = 0.06
 
     @Published var provider: TranscriptionProvider = .openai
+    @Published var openAIModel: OpenAITranscriptionModel = .gpt4oMiniTranscribe
     @Published var openAIKeyInput: String = ""
     @Published var whisperCppPath: String = ""
     @Published var whisperModelPath: String = ""
@@ -42,6 +43,7 @@ final class SettingsViewModel: ObservableObject {
         overlayMeterEnabled = settings.overlayMeterEnabled
         silenceThreshold = settings.silenceThreshold
         provider = settings.provider
+        openAIModel = settings.openAIModel
         whisperCppPath = settings.whisperCppPath
         whisperModelPath = settings.whisperModelPath
         language = settings.language
@@ -66,6 +68,7 @@ final class SettingsViewModel: ObservableObject {
         settings.silenceThreshold = silenceThreshold
 
         settings.provider = provider
+        settings.openAIModel = openAIModel
         settings.whisperCppPath = whisperCppPath
         settings.whisperModelPath = whisperModelPath
         settings.language = language
@@ -77,8 +80,9 @@ final class SettingsViewModel: ObservableObject {
         settings.autoSaveLongCapturesToNotes = autoSaveLongCapturesToNotes
         settings.longCaptureThresholdWords = longCaptureThresholdWords
 
-        if !openAIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            try? keyStore.save(openAIKeyInput)
+        let trimmedKeyInput = openAIKeyInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedKeyInput.isEmpty {
+            try? keyStore.save(trimmedKeyInput)
             settings.openAIKeyRef = "openai-api-key"
         }
 
@@ -92,7 +96,12 @@ final class SettingsViewModel: ObservableObject {
     }
 
     func hasStoredOpenAIKey() -> Bool {
-        settings.openAIKeyRef.isEmpty == false
+        if !settings.openAIKeyRef.isEmpty {
+            return true
+        }
+
+        guard let storedKey = try? keyStore.load() else { return false }
+        return !storedKey.isEmpty
     }
 
     func clearHistory(_ captureRepository: CaptureRepository) {
