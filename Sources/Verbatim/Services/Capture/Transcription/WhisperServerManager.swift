@@ -81,7 +81,7 @@ actor WhisperServerManager {
         return downloaded
     }
 
-    func isAvailable() -> Bool {
+    nonisolated func isAvailable() -> Bool {
         FileManager.default.fileExists(atPath: cachedBinaryPath().path) &&
         FileManager.default.isExecutableFile(atPath: cachedBinaryPath().path)
     }
@@ -146,12 +146,12 @@ actor WhisperServerManager {
         }
     }
 
-    private func cachedBinaryPath() -> URL {
+    nonisolated private func cachedBinaryPath() -> URL {
         let binaryName = cachedBinaryName()
         return repositoryDir.appendingPathComponent(binaryName, isDirectory: false)
     }
 
-    private func cachedBinaryName() -> String {
+    nonisolated private func cachedBinaryName() -> String {
         #if arch(arm64)
         return "whisper-server-darwin-arm64"
         #else

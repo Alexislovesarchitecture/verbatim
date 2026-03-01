@@ -289,8 +289,8 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         Task {
             let settings = settingsRepository.settings()
             guard settings.provider == .whispercpp,
-                  settings.whisperBackend == .server,
-                  settings.whisperServerAutoStart else {
+                  (settings.whisperBackend ?? .server) == .server,
+                  settings.whisperServerAutoStart ?? true else {
                 return
             }
             _ = await ensureServerRunningForCurrentSettings()
@@ -343,7 +343,10 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
                       !key.isEmpty else {
                     throw TranscriptionEngineError.missingAPIKey
                 }
-                return OpenAITranscriptionEngine(apiKey: key, model: settings.openAIModel.rawValue)
+                return OpenAITranscriptionEngine(
+                    apiKey: key,
+                    model: (settings.openAIModel ?? .gpt4oMiniTranscribe).rawValue
+                )
             } catch {
                 if error is TranscriptionEngineError {
                     throw error
@@ -351,12 +354,15 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
                 throw TranscriptionEngineError.missingAPIKey
             }
         case .whispercpp:
-            let modelId = whisperModelManager.normalizeModelId(settings.whisperModelId)
-            if settings.whisperBackend == .cli {
+            let modelId = whisperModelManager.normalizeModelId(settings.whisperModelId ?? WhisperLocalModel.defaultId.rawValue)
+            if (settings.whisperBackend ?? .server) == .cli {
                 return try buildLegacyWhisperEngine(from: settings)
             }
 
-            guard whisperModelManager.isModelDownloaded(modelId, modelsDirectory: settings.whisperModelsDir) else {
+            guard whisperModelManager.isModelDownloaded(
+                modelId,
+                modelsDirectory: settings.whisperModelsDir ?? WhisperModelDirectory.defaultPath
+            ) else {
                 throw TranscriptionEngineError.missingModel
             }
 
@@ -467,18 +473,27 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
 
     func ensureServerRunningForCurrentSettings() async -> URL? {
         let settings = settingsRepository.settings()
-        guard settings.provider == .whispercpp, settings.whisperBackend == .server else { return nil }
-        let modelId = whisperModelManager.normalizeModelId(settings.whisperModelId)
-        guard whisperModelManager.isModelDownloaded(modelId, modelsDirectory: settings.whisperModelsDir) else {
+        guard settings.provider == .whispercpp, (settings.whisperBackend ?? .server) == .server else { return nil }
+        let modelId = whisperModelManager.normalizeModelId(settings.whisperModelId ?? WhisperLocalModel.defaultId.rawValue)
+        guard whisperModelManager.isModelDownloaded(
+            modelId,
+            modelsDirectory: settings.whisperModelsDir ?? WhisperModelDirectory.defaultPath
+        ) else {
             return nil
         }
-        let modelPath = whisperModelManager.modelPath(for: modelId, modelsDirectory: settings.whisperModelsDir)
+        let modelPath = whisperModelManager.modelPath(
+            for: modelId,
+            modelsDirectory: settings.whisperModelsDir ?? WhisperModelDirectory.defaultPath
+        )
         do {
             let binaryURL = try await whisperServerManager.ensureServerBinaryPath(overridePath: settings.whisperCppPath)
             return try await whisperServerManager.ensureServerRunning(
                 modelPath: modelPath.path,
                 binaryPath: binaryURL,
-                config: .init(threads: max(1, settings.whisperLocalThreads), language: settings.language.isEmpty ? "auto" : settings.language)
+                config: .init(
+                    threads: max(1, settings.whisperLocalThreads ?? 4),
+                    language: settings.language.isEmpty ? "auto" : settings.language
+                )
             )
         }
         catch {

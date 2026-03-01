@@ -74,10 +74,10 @@ final class PersistenceFlowTests: XCTestCase {
         let settingsRepo = SwiftDataSettingsRepository(context: context)
         let settings = settingsRepo.settings()
 
-        XCTAssertEqual(settings.whisperBackend, .server)
+        XCTAssertEqual(settings.whisperBackend ?? .server, .server)
         XCTAssertEqual(settings.whisperModelId, WhisperLocalModel.defaultId.rawValue)
-        XCTAssertFalse(settings.whisperModelsDir.isEmpty)
-        XCTAssertEqual(settings.whisperServerAutoStart, true)
-        XCTAssertEqual(settings.whisperLocalThreads, 4)
+        XCTAssertFalse((settings.whisperModelsDir ?? "").isEmpty)
+        XCTAssertEqual(settings.whisperServerAutoStart ?? true, true)
+        XCTAssertEqual(settings.whisperLocalThreads ?? 4, 4)
     }
 }
