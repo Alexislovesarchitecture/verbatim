@@ -2,6 +2,7 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+@MainActor
 protocol TextInsertionServicing {
     func requestAccessibilityIfNeeded()
     func copyToClipboard(_ text: String)

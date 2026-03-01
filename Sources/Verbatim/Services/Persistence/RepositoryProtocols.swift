@@ -1,5 +1,6 @@
 import Foundation
 
+@MainActor
 protocol CaptureRepository {
     func all() -> [CaptureRecord]
     func filtered(status: CaptureStatus?) -> [CaptureRecord]
@@ -41,6 +42,7 @@ protocol NoteRepository {
     func find(_ id: UUID) -> NoteEntry?
 }
 
+@MainActor
 protocol SettingsRepository {
     func settings() -> AppSettings
     func behaviorSettings() -> LocalBehaviorSettings

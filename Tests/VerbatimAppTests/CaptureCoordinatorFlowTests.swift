@@ -23,7 +23,7 @@ private final class FakeTranscriptionCoordinatorInsertionService: TextInsertionS
 
 @MainActor
 final class CaptureCoordinatorFlowTests: XCTestCase {
-    private func coordinatorWithFakeInsertion(_ fake: FakeTranscriptionCoordinatorInsertionService) -> CaptureCoordinator {
+    private func coordinatorWithFakeInsertion(_ fake: FakeTranscriptionCoordinatorInsertionService, keyStore: OpenAIKeyStore = OpenAIKeyStore(service: "com.verbatim.tests.coordinator")) -> CaptureCoordinator {
         let schema = Schema([
             CaptureRecord.self,
             DictionaryEntry.self,
@@ -47,8 +47,45 @@ final class CaptureCoordinatorFlowTests: XCTestCase {
             styleRepository: SwiftDataStyleRepository(context: context),
             noteRepository: SwiftDataNoteRepository(context: context),
             settingsRepository: SwiftDataSettingsRepository(context: context),
-            keyStore: OpenAIKeyStore()
+            keyStore: keyStore
         )
+    }
+
+    func testBuildTranscriptionEngineReturnsOpenAIEngine() async throws {
+        let fake = FakeTranscriptionCoordinatorInsertionService()
+        let service = OpenAIKeyStore(service: "com.verbatim.tests.coordinator.openai")
+        try? service.clear()
+        try service.save("test-key")
+
+        let coordinator = coordinatorWithFakeInsertion(fake, keyStore: service)
+        let settings = coordinator.settingsRepository.settings()
+        settings.provider = .openai
+        coordinator.settingsRepository.save(settings: settings)
+
+        let engine = try await coordinator.buildTranscriptionEngine()
+        XCTAssertTrue(engine is OpenAITranscriptionEngine)
+    }
+
+    func testBuildTranscriptionEngineThrowsWhenWhisperServerModelIsMissing() async throws {
+        let fake = FakeTranscriptionCoordinatorInsertionService()
+        let coordinator = coordinatorWithFakeInsertion(fake)
+        let settings = coordinator.settingsRepository.settings()
+        settings.provider = .whispercpp
+        settings.whisperBackend = .server
+        settings.whisperModelsDir = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-model-missing").path
+        coordinator.settingsRepository.save(settings: settings)
+
+        do {
+            _ = try await coordinator.buildTranscriptionEngine()
+            XCTFail("Expected missing model error")
+        } catch {
+            guard let typed = error as? TranscriptionEngineError else {
+                return XCTFail("Expected TranscriptionEngineError")
+            }
+            guard case .missingModel = typed else {
+                return XCTFail("Expected missingModel, got \(typed)")
+            }
+        }
     }
 
     func testAutoInsertPath() {

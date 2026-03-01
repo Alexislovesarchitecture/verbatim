@@ -12,6 +12,10 @@ final class AppState: ObservableObject {
     let noteRepository: NoteRepository
     let settingsRepository: SettingsRepository
 
+    private let whisperModelManager = WhisperModelManager()
+    private let whisperServerManager = WhisperServerManager()
+    private let localWhisperClient = LocalWhisperClient()
+
     let coordinator: CaptureCoordinator
     private let insertionService: TextInsertionServicing
 
@@ -54,17 +58,22 @@ final class AppState: ObservableObject {
             styleRepository: styleRepository,
             noteRepository: noteRepository,
             settingsRepository: settingsRepository,
-            keyStore: OpenAIKeyStore()
+            keyStore: OpenAIKeyStore(),
+            whisperModelManager: whisperModelManager,
+            whisperServerManager: whisperServerManager,
+            localWhisperClient: localWhisperClient
         )
     }
 
     func startRuntimeServices() {
         requestPermissions()
         coordinator.startListeningMonitoring()
+        coordinator.startLocalWhisperServerIfNeeded()
     }
 
     func stopRuntimeServices() {
         coordinator.stopListeningMonitoring()
+        coordinator.stopLocalWhisperServer()
     }
 
     private func requestPermissions() {

@@ -68,4 +68,16 @@ final class PersistenceFlowTests: XCTestCase {
         XCTAssertEqual(items.count, 1)
         XCTAssertEqual(items.first?.formattedText, "new")
     }
+
+    func testWhisperDefaultsPersist() {
+        let context = inMemoryContext()
+        let settingsRepo = SwiftDataSettingsRepository(context: context)
+        let settings = settingsRepo.settings()
+
+        XCTAssertEqual(settings.whisperBackend, .server)
+        XCTAssertEqual(settings.whisperModelId, WhisperLocalModel.defaultId.rawValue)
+        XCTAssertFalse(settings.whisperModelsDir.isEmpty)
+        XCTAssertEqual(settings.whisperServerAutoStart, true)
+        XCTAssertEqual(settings.whisperLocalThreads, 4)
+    }
 }

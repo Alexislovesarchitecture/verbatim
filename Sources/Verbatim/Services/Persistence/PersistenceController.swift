@@ -152,6 +152,24 @@ final class PersistenceController {
         settings.stopSoundEnabled = true
         settings.doubleTapFnLockEnabled = true
         settings.overlayMeterEnabled = true
+        settings.whisperBackend = .server
+        settings.whisperModelId = WhisperLocalModel.defaultId.rawValue
+        settings.whisperModelsDir = WhisperModelDirectory.defaultPath
+        settings.whisperServerAutoStart = true
+        settings.whisperLocalThreads = 4
+        settings.whisperCppPath = ""
+        settings.whisperModelPath = ""
+
+        let trimmedCliPath = legacy.whisperCLIPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedModelPath = legacy.whisperModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedCliPath.isEmpty && !trimmedModelPath.isEmpty
+            && FileManager.default.fileExists(atPath: (trimmedCliPath as NSString).expandingTildeInPath)
+            && FileManager.default.fileExists(atPath: (trimmedModelPath as NSString).expandingTildeInPath) {
+            settings.whisperBackend = .cli
+            settings.whisperCppPath = trimmedCliPath
+            settings.whisperModelPath = trimmedModelPath
+        }
+
         let trimmedKey = legacy.openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedKey.isEmpty {
             settings.openAIKeyRef = ""
@@ -163,8 +181,6 @@ final class PersistenceController {
                 print("Failed to restore legacy OpenAI key: \(error)")
             }
         }
-        settings.whisperCppPath = legacy.whisperCLIPath
-        settings.whisperModelPath = legacy.whisperModelPath
     }
 
     private func seedStarterData(_ context: ModelContext) {

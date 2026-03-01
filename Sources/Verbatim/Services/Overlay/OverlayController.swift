@@ -14,7 +14,25 @@ final class OverlayController {
     private let viewModel = OverlayViewModel()
     private var panel: NSPanel?
 
-    func show(state: CaptureUICue, level: Float, message: String = "", stopAction: (() -> Void)? = nil) {
+    nonisolated func show(state: CaptureUICue, level: Float, message: String = "", stopAction: (() -> Void)? = nil) {
+        Task { @MainActor [weak self] in
+            self?.showOnMain(state: state, level: level, message: message, stopAction: stopAction)
+        }
+    }
+
+    nonisolated func update(state: CaptureUICue, level: Float, message: String = "") {
+        Task { @MainActor [weak self] in
+            self?.updateOnMain(state: state, level: level, message: message)
+        }
+    }
+
+    nonisolated func hide() {
+        Task { @MainActor [weak self] in
+            self?.hideOnMain()
+        }
+    }
+
+    private func showOnMain(state: CaptureUICue, level: Float, message: String = "", stopAction: (() -> Void)? = nil) {
         if panel == nil {
             panel = buildPanel()
         }
@@ -27,14 +45,14 @@ final class OverlayController {
         panel?.orderFrontRegardless()
     }
 
-    func update(state: CaptureUICue, level: Float, message: String = "") {
+    private func updateOnMain(state: CaptureUICue, level: Float, message: String = "") {
         viewModel.state = state
         viewModel.level = level
         viewModel.message = message
         positionPanel()
     }
 
-    func hide() {
+    private func hideOnMain() {
         panel?.orderOut(nil)
     }
 

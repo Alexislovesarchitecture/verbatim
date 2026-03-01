@@ -161,6 +161,33 @@ enum TranscriptionProvider: String, Codable, CaseIterable, Identifiable {
     var title: String { rawValue == "openai" ? "OpenAI" : "whisper.cpp" }
 }
 
+enum WhisperLocalBackend: String, Codable, CaseIterable, Identifiable {
+    case server
+    case cli
+
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .server:
+            return "Local server"
+        case .cli:
+            return "Legacy CLI"
+        }
+    }
+}
+
+enum WhisperLocalModelId: String, Codable, CaseIterable, Identifiable {
+    case tiny
+    case base
+    case small
+    case medium
+    case large
+    case turbo
+
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+}
+
 enum OpenAITranscriptionModel: String, Codable, CaseIterable, Identifiable {
     case gpt4oMiniTranscribe = "gpt-4o-mini-transcribe"
     case gpt4oTranscribe = "gpt-4o-transcribe"

@@ -214,6 +214,11 @@ final class AppSettings {
     var openAIKeyRef: String
     var whisperCppPath: String
     var whisperModelPath: String
+    var whisperBackend: WhisperLocalBackend
+    var whisperModelId: String
+    var whisperModelsDir: String
+    var whisperServerAutoStart: Bool
+    var whisperLocalThreads: Int
     var language: String
 
     var autoInsertEnabled: Bool
@@ -235,8 +240,13 @@ final class AppSettings {
         provider: TranscriptionProvider = .openai,
         openAIModel: OpenAITranscriptionModel = .gpt4oMiniTranscribe,
         openAIKeyRef: String = "",
-        whisperCppPath: String = "/opt/homebrew/bin/whisper-cli",
+        whisperCppPath: String = "",
         whisperModelPath: String = "",
+        whisperBackend: WhisperLocalBackend = .server,
+        whisperModelId: String = WhisperLocalModel.defaultId.rawValue,
+        whisperModelsDir: String = WhisperModelDirectory.defaultPath,
+        whisperServerAutoStart: Bool = true,
+        whisperLocalThreads: Int = 4,
         language: String = "en",
         autoInsertEnabled: Bool = true,
         clipboardFallbackEnabled: Bool = true,
@@ -257,6 +267,11 @@ final class AppSettings {
         self.openAIKeyRef = openAIKeyRef
         self.whisperCppPath = whisperCppPath
         self.whisperModelPath = whisperModelPath
+        self.whisperBackend = whisperBackend
+        self.whisperModelId = whisperModelId
+        self.whisperModelsDir = whisperModelsDir
+        self.whisperServerAutoStart = whisperServerAutoStart
+        self.whisperLocalThreads = whisperLocalThreads
         self.language = language
         self.autoInsertEnabled = autoInsertEnabled
         self.clipboardFallbackEnabled = clipboardFallbackEnabled
@@ -266,4 +281,21 @@ final class AppSettings {
         self.autoSaveLongCapturesToNotes = autoSaveLongCapturesToNotes
         self.longCaptureThresholdWords = longCaptureThresholdWords
     }
+}
+
+enum WhisperModelDirectory {
+    static var defaultPath: String {
+        let base = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first
+            ?? FileManager.default.temporaryDirectory
+        return base
+            .appendingPathComponent("Verbatim", isDirectory: true)
+            .appendingPathComponent("whisper-models", isDirectory: true)
+            .path
+    }
+}
+
+enum WhisperLocalModel {
+    static var defaultId: WhisperLocalModelId { .base }
 }

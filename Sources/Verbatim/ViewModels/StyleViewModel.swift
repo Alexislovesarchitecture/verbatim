@@ -36,7 +36,7 @@ final class StyleViewModel: ObservableObject {
     }
 
     func selectTone(_ tone: StyleTone, for category: StyleCategory) {
-        var profile = profile(for: category)
+        let profile = profile(for: category)
         profile.tone = tone
         profile.capsMode = tone == .veryCasual || tone == .excitedOptional ? .lowercase : .sentenceCase
         profile.punctuationMode = tone == .casual ? .light : .normal

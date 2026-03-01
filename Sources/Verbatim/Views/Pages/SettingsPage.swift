@@ -52,8 +52,70 @@ struct SettingsPage: View {
                     }
                 }
 
+                Picker("Local backend", selection: $viewModel.whisperBackend) {
+                    ForEach(WhisperLocalBackend.allCases) { backend in
+                        Text(backend.title).tag(backend)
+                    }
+                }
+
+                Picker("Whisper model", selection: $viewModel.whisperModelId) {
+                    ForEach(viewModel.availableWhisperModels) { model in
+                        Text(viewModel.modelDisplayName(model)).tag(model.id)
+                    }
+                }
+
                 TextField("whisper.cpp path", text: $viewModel.whisperCppPath)
-                TextField("whisper model path", text: $viewModel.whisperModelPath)
+                Text("Server binary: \(viewModel.serverBinaryStatus)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    Button("Download server binary") {
+                        viewModel.downloadServerBinary()
+                    }
+                    .disabled(viewModel.isDownloadingServerBinary)
+                    if viewModel.isDownloadingServerBinary {
+                        ProgressView()
+                            .scaleEffect(0.75)
+                    }
+                }
+                if !viewModel.serverBinaryMessage.isEmpty {
+                    Text(viewModel.serverBinaryMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text("Selected model: \(viewModel.selectedModelStatus.path.lastPathComponent)")
+                Text(viewModel.selectedModelStatus.isDownloaded ? "Model is available" : "Model is not downloaded")
+                    .foregroundStyle(viewModel.selectedModelStatus.isDownloaded ? .green : .secondary)
+                    .font(.caption)
+                if let size = viewModel.selectedModelStatus.fileSizeBytes {
+                    Text("Model size: \(viewModel.formatBytes(size))")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                }
+
+                HStack {
+                    Button("Download model") {
+                        viewModel.downloadSelectedWhisperModel()
+                    }
+                    .disabled(viewModel.isDownloadingModel)
+                    if viewModel.isDownloadingModel {
+                        ProgressView()
+                            .scaleEffect(0.75)
+                    }
+                }
+                if !viewModel.modelDownloadMessage.isEmpty {
+                    Text(viewModel.modelDownloadMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                TextField("Models directory", text: $viewModel.whisperModelsDir)
+                Toggle("Auto-start local server", isOn: $viewModel.whisperServerAutoStart)
+                Stepper("Server threads", value: $viewModel.whisperLocalThreads, in: 1...64)
+
+                TextField("Legacy whisper model path", text: $viewModel.whisperModelPath)
                 TextField("Language", text: $viewModel.language)
             }
 

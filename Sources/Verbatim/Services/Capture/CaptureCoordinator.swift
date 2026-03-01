@@ -18,6 +18,9 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
     private let noteRepository: NoteRepository
     let settingsRepository: SettingsRepository
     private let keyStore: OpenAIKeyStore
+    private let whisperModelManager: WhisperModelManager
+    private let whisperServerManager: WhisperServerManager
+    private let localWhisperClient: LocalWhisperClient
     private let onRecordingSaved: (@MainActor () -> Void)?
 
     private var currentState: CaptureCoordinatorState = .idle
@@ -36,6 +39,9 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         noteRepository: NoteRepository,
         settingsRepository: SettingsRepository,
         keyStore: OpenAIKeyStore,
+        whisperModelManager: WhisperModelManager = WhisperModelManager(),
+        whisperServerManager: WhisperServerManager = WhisperServerManager(),
+        localWhisperClient: LocalWhisperClient = LocalWhisperClient(),
         onRecordingSaved: @escaping @MainActor () -> Void = {}
     ) {
         self.insertionService = insertionService
@@ -49,6 +55,9 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         self.noteRepository = noteRepository
         self.settingsRepository = settingsRepository
         self.keyStore = keyStore
+        self.whisperModelManager = whisperModelManager
+        self.whisperServerManager = whisperServerManager
+        self.localWhisperClient = localWhisperClient
         self.onRecordingSaved = onRecordingSaved
         configureHotkeys()
     }
@@ -143,12 +152,13 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         let settings = settingsRepository.settings()
         let behavior = settingsRepository.behaviorSettings()
 
-        guard let transcriptionEngine = await buildTranscriptionEngine() else {
+        let transcriptionEngine: TranscriptionEngineProtocol
+        do {
+            transcriptionEngine = try await buildTranscriptionEngine()
+        } catch {
             currentState = .failed
             uiState = .error
-            let message = settings.provider == .openai
-                ? "No transcription engine configured. Add an OpenAI key in Settings."
-                : "No transcription engine configured. Check whisper.cpp path/model in Settings."
+            let message = transcriptionConfigErrorMessage(error, for: settings)
             overlay.show(state: .error, level: 0, message: message)
             addFailedCapture(raw: "", formatted: "", status: .failed, errorMessage: message)
             return
@@ -242,9 +252,10 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
             currentState = .failed
             uiState = .error
             print("Transcription failed: \(error)")
+            let message = transcriptionRuntimeErrorMessage(error, settings: settings)
             let status: CaptureStatus = .failed
-            addFailedCapture(raw: "", formatted: "", status: status, errorMessage: error.localizedDescription)
-            overlay.show(state: .error, level: 0, message: error.localizedDescription)
+            addFailedCapture(raw: "", formatted: "", status: status, errorMessage: message)
+            overlay.show(state: .error, level: 0, message: message)
         }
 
         do {
@@ -272,6 +283,24 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
 
     func stopListeningMonitoring() {
         hotkeyMonitor.stop()
+    }
+
+    func startLocalWhisperServerIfNeeded() {
+        Task {
+            let settings = settingsRepository.settings()
+            guard settings.provider == .whispercpp,
+                  settings.whisperBackend == .server,
+                  settings.whisperServerAutoStart else {
+                return
+            }
+            _ = await ensureServerRunningForCurrentSettings()
+        }
+    }
+
+    func stopLocalWhisperServer() {
+        Task {
+            await whisperServerManager.stop()
+        }
     }
 
     private func configureHotkeys() {
@@ -305,26 +334,156 @@ final class CaptureCoordinator: ObservableObject, CaptureCoordinatorProtocol {
         return dictionaryTerms.isEmpty ? "" : "Prefer these terms: \(dictionaryTerms)"
     }
 
-    private func buildTranscriptionEngine() async -> TranscriptionEngineProtocol? {
+    func buildTranscriptionEngine() async throws -> TranscriptionEngineProtocol {
         let settings = settingsRepository.settings()
         switch settings.provider {
         case .openai:
             do {
                 guard let key = try keyStore.load()?.trimmingCharacters(in: .whitespacesAndNewlines),
                       !key.isEmpty else {
-                    print("OpenAI engine not configured: no API key found in keychain.")
-                    return nil
+                    throw TranscriptionEngineError.missingAPIKey
                 }
                 return OpenAITranscriptionEngine(apiKey: key, model: settings.openAIModel.rawValue)
             } catch {
-                print("OpenAI engine not configured: failed reading keychain (\(error))")
-                return nil
+                if error is TranscriptionEngineError {
+                    throw error
+                }
+                throw TranscriptionEngineError.missingAPIKey
             }
         case .whispercpp:
-            return WhisperCppTranscriptionEngine(
-                cliPath: settings.whisperCppPath,
-                modelPath: settings.whisperModelPath
+            let modelId = whisperModelManager.normalizeModelId(settings.whisperModelId)
+            if settings.whisperBackend == .cli {
+                return try buildLegacyWhisperEngine(from: settings)
+            }
+
+            guard whisperModelManager.isModelDownloaded(modelId, modelsDirectory: settings.whisperModelsDir) else {
+                throw TranscriptionEngineError.missingModel
+            }
+
+            do {
+                _ = try await whisperServerManager.ensureServerBinaryPath(overridePath: settings.whisperCppPath)
+                return LocalWhisperServerTranscriptionEngine(
+                    settings: settings,
+                    modelManager: whisperModelManager,
+                    serverManager: whisperServerManager,
+                    client: localWhisperClient
+                )
+            } catch {
+                print("Local whisper server unavailable: \(error)")
+                throw mapWhisperManagerError(error)
+            }
+        }
+    }
+
+    private func buildLegacyWhisperEngine(from settings: AppSettings) throws -> WhisperCppTranscriptionEngine {
+        let rawCliPath = settings.whisperCppPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawModelPath = settings.whisperModelPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawCliPath.isEmpty else {
+            throw TranscriptionEngineError.missingExecutable
+        }
+        guard !rawModelPath.isEmpty else {
+            throw TranscriptionEngineError.missingModel
+        }
+
+        let cliPath = (rawCliPath as NSString).expandingTildeInPath
+        let modelPath = (rawModelPath as NSString).expandingTildeInPath
+        guard FileManager.default.fileExists(atPath: cliPath) else {
+            throw TranscriptionEngineError.missingExecutable
+        }
+        guard FileManager.default.isExecutableFile(atPath: cliPath) else {
+            throw TranscriptionEngineError.executableNotRunnable
+        }
+        guard FileManager.default.fileExists(atPath: modelPath) else {
+            throw TranscriptionEngineError.missingModel
+        }
+
+        return WhisperCppTranscriptionEngine(
+            cliPath: settings.whisperCppPath,
+            modelPath: settings.whisperModelPath
+        )
+    }
+
+    private func mapWhisperManagerError(_ error: Error) -> TranscriptionEngineError {
+        if let serverError = error as? WhisperServerManagerError {
+            switch serverError {
+            case .binaryNotFound, .binaryNotExecutable:
+                return .missingServerBinary
+            case .startupTimeout:
+                return .serverTimeout
+            case .processExited:
+                return .requestFailed(error.localizedDescription)
+            }
+        }
+        if let engineError = error as? TranscriptionEngineError {
+            return engineError
+        }
+        return TranscriptionEngineError.requestFailed(error.localizedDescription)
+    }
+
+    private func transcriptionConfigErrorMessage(_ error: Error, for settings: AppSettings) -> String {
+        let transcriptError = error as? TranscriptionEngineError ?? .requestFailed("Unknown error")
+        switch transcriptError {
+        case .missingAPIKey:
+            return "No OpenAI API key found. Add one in Settings."
+        case .missingModel:
+            return settings.provider == .openai
+                ? "Missing OpenAI model configuration."
+                : "Local whisper model not downloaded. Select a model and click Download model."
+        case .missingExecutable:
+            return "Local whisper CLI executable is missing."
+        case .executableNotRunnable:
+            return "Local whisper CLI executable is not runnable."
+        case .missingServerBinary:
+            return "Local whisper server binary is not available. Download it from Settings."
+        case .missingServerEndpoint:
+            return "Local whisper server endpoint is unavailable."
+        case .serverTimeout:
+            return "Local whisper server did not start in time."
+        case .invalidResponse, .requestFailed:
+            return "Failed to initialize transcription."
+        case .emptyTranscript:
+            return "Transcription was empty."
+        }
+    }
+
+    private func transcriptionRuntimeErrorMessage(_ error: Error, settings: AppSettings) -> String {
+        if let transcriptError = error as? TranscriptionEngineError {
+            return transcriptionConfigErrorMessage(transcriptError, for: settings)
+        }
+
+        if let serverError = error as? WhisperServerManagerError {
+            switch serverError {
+            case .binaryNotFound, .binaryNotExecutable:
+                return "Local whisper server binary is unavailable."
+            case .startupTimeout:
+                return "Local whisper server did not start in time."
+            case .processExited(let reason):
+                return "Local whisper server exited unexpectedly: \(reason)"
+            }
+        }
+
+        return error.localizedDescription
+    }
+
+    func ensureServerRunningForCurrentSettings() async -> URL? {
+        let settings = settingsRepository.settings()
+        guard settings.provider == .whispercpp, settings.whisperBackend == .server else { return nil }
+        let modelId = whisperModelManager.normalizeModelId(settings.whisperModelId)
+        guard whisperModelManager.isModelDownloaded(modelId, modelsDirectory: settings.whisperModelsDir) else {
+            return nil
+        }
+        let modelPath = whisperModelManager.modelPath(for: modelId, modelsDirectory: settings.whisperModelsDir)
+        do {
+            let binaryURL = try await whisperServerManager.ensureServerBinaryPath(overridePath: settings.whisperCppPath)
+            return try await whisperServerManager.ensureServerRunning(
+                modelPath: modelPath.path,
+                binaryPath: binaryURL,
+                config: .init(threads: max(1, settings.whisperLocalThreads), language: settings.language.isEmpty ? "auto" : settings.language)
             )
+        }
+        catch {
+            print("Failed to prewarm whisper server: \(error)")
+            return nil
         }
     }
 

@@ -11,4 +11,8 @@ enum TranscriptionEngineError: Error {
     case executableNotRunnable
     case requestFailed(String)
     case invalidResponse
+    case missingServerBinary
+    case missingServerEndpoint
+    case serverTimeout
+    case emptyTranscript
 }
