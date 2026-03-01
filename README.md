@@ -1,151 +1,96 @@
 # Verbatim
 
-Verbatim is a macOS dictation app scaffold inspired by Wispr Flow, FreeFlow, open-wispr, and OpenSuperWhisper.
+Local-first, SwiftData-backed dictation app shell for macOS inspired by Flow-style dictation workflows.
 
-This package includes:
-- a native SwiftUI sidebar app shell
-- a menu bar extra
-- Fn / Globe hold-to-talk monitoring scaffold
-- double-tap lock listening scaffold
-- listening overlay with stop button
-- audio recording with input level metering
-- pluggable transcription engines
-  - OpenAI Audio API
-  - local whisper.cpp CLI shell-out
-- rule-based formatting pipeline
-- insertion with Accessibility first, clipboard fallback second
-- Home, Dictionary, Snippets, Style, Notes, and Settings screens
-- JSON persistence for local data
+## Scope
 
-## What is real vs scaffold
+- No sync and no team-sharing in this build.
+- Shared dictionary/snippet tabs are present as UI stubs.
+- Data is persisted in SwiftData and local keychain.
 
-Implemented in source:
-- app shell and data model
-- history, dictionary, snippets, style, settings UI
-- audio recording pipeline
-- OpenAI transcription request code
-- whisper.cpp CLI integration scaffold
-- Accessibility insertion attempt
-- clipboard fallback path
-- menu bar extra and listening overlay
+## How to run
 
-Needs live testing on a real Mac:
-- global Fn / Globe behavior on your keyboard layout
-- Accessibility insertion edge cases across apps
-- microphone and Accessibility permission flow
-- whisper.cpp binary path and local model path
-- code signing and app packaging
-
-## Recommended build path
-
-### Verbatim build path (implemented)
-
-This repo is built from `Sources/Verbatim` only.  
-`Sources/VerbatimApp` is retained as a historical duplicate and is not part of the package target.
-
-#### 1) Fastest macOS run
-
-From project root:
+### Build with the package (recommended)
 
 ```bash
 cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim
-./scripts/build-verbatim.sh
+swift build
+swift run Verbatim
 ```
 
-Then in Xcode:
+If you prefer Xcode:
 
-1. Verify target bundle settings:
-   - deployment target: `13.0`
-   - sandbox: disabled for local testing
-2. Confirm Info.plist keys include microphone + accessibility prompts.
-3. Build and run.
-4. Grant microphone + accessibility permissions when prompted.
+1. Open/create a macOS app target and add `Sources/Verbatim` as the source root.
+2. Ensure macOS deployment target is at least `14`.
+3. Set package/module name `Verbatim`.
+4. Build and run.
 
-#### 2) Manual path (no `xcodegen`)
+## Permissions
 
-1. Create a new macOS App in Xcode (SwiftUI).
-2. Add only `Sources/Verbatim` to the target.
-3. Confirm product/module name is `Verbatim`.
-4. Apply the same permissions and run.
+You must grant the following macOS permissions for full behavior:
 
-### Fastest
-1. Install Xcode.
-2. Install XcodeGen if you want a ready macOS app project.
-3. Run `./scripts/build-verbatim.sh`.
-4. Build and run in Xcode.
+- **Microphone**: required for recording dictation audio.
+- **Accessibility**: required for editable-target insertion mode.
 
-### Without XcodeGen (legacy)
-1. Create a new macOS App in Xcode named `Verbatim`.
-2. Drag everything from `Sources/Verbatim` into the project.
-3. Disable App Sandbox for local testing.
-4. Add microphone and accessibility usage descriptions to the target Info.
-5. Build and run.
+If accessibility is denied, app falls back to clipboard capture when fallback mode is enabled.
 
-## Runtime verification checklist (first run)
+## Project structure
 
-- Capture start: Fn press starts recording.
-- Stop path: releasing Fn stops and sends to transcribe.
-- Lock path: double-tap Fn enters locked mode, stop button exits.
-- Insert path: direct insert succeeds in a focused field.
-- Clipboard fallback: succeeds when insertion target is unavailable.
-- History: new entry appears in Home view.
-- Overlay: state updates during record/transcribe/insert.
+- `Sources/Verbatim` is the active app target.
+- `Sources/Verbatim/App` app entry and shell state.
+- `Sources/Verbatim/Models` domain enums and SwiftData models.
+- `Sources/Verbatim/Services` capture pipeline, persistence, hotkey, transcription, insertion, overlay.
+- `Sources/Verbatim/ViewModels` and `Views` for page-based UI.
+- `Tests/VerbatimAppTests` contains formatting/repository/flow unit tests.
 
-## Suggested first configuration
+## Local data location
 
-### OpenAI mode
-- provider: OpenAI
-- model: `gpt-4o-mini-transcribe`
-- add your API key in Settings, or set `OPENAI_API_KEY` in your shell/environment
-- for local setup, copy `.env.example` to `.env` and set `OPENAI_API_KEY=...` (never commit `.env`)
-- optional formatter prompt bias: your name, company names, client jargon
+SwiftData stores are under:
 
-### Local mode
-- install whisper.cpp
-- point Verbatim at `whisper-cli`
-- point Verbatim at a local ggml model file such as `base.en`
+`~/Library/Application Support/Verbatim/`
 
-## Why the architecture looks like this
+## Manual test checklist
 
-Reference products point to the same pattern:
-- FreeFlow uses `Fn` hold-to-record and pastes into the current text field, with a cloud transcription plus post-processing step for context-aware cleanup.
-- open-wispr uses Globe hold-to-talk, runs on-device with whisper.cpp and Metal, shows a menu bar waveform, and types at the cursor in any app.
-- OpenSuperWhisper supports global shortcuts, hold-to-record, and multiple transcription engines.
-- Apple Writing Tools overlap with cleanup and rewrite, but not with push-to-talk anywhere.
+1. **App boot + shell**
+   - Launch app and confirm left rail tabs appear: Home, Dictionary, Snippets, Style, Notes, Settings.
+   - Open each page and verify page header + card styling.
 
-That is why Verbatim is split into five swappable modules:
-1. Hotkey and capture
-2. Transcription
-3. Formatting
-4. Insertion
-5. Local memory and UI
+2. **Dictionary CRUD**
+   - Add a new dictionary term/replacement/expansion.
+   - Edit and delete an item.
+   - Confirm values survive app restart.
 
-## Current MVP priorities baked into this scaffold
+3. **Snippet CRUD**
+   - Add a snippet with enabled + exact-match toggles.
+   - Edit and delete.
+   - Confirm restart persistence.
 
-- press Fn to talk, release to stop
-- double-tap Fn to lock listening
-- visible listening state with a stop button
-- audible start cue
-- automatic insertion when possible
-- clipboard fallback when insertion fails or no text field is focused
-- persistent timeline so you never lose a capture
+4. **Style + preview**
+   - Open each category tab (Personal/Work/Email/Other).
+   - Change tone for a category and verify `previewText` updates.
+   - Toggle filler/voice command options and confirm formatting changes in preview.
 
-## Files
+5. **Home history**
+   - Capture any transcript (if available), confirm it appears in Home.
+   - Switch history filters (All/Inserted/Clipboard/Failed).
+   - Expand a history row to see raw/formatted and copy actions.
+   - Verify `Copy last capture` uses formatted text when present.
 
-- `App/VerbatimApp.swift`: app entry point
-- `App/VerbatimStore.swift`: main coordinator and state machine
-- `Models/Models.swift`: app models and settings
-- `Services/HotkeyMonitor.swift`: Fn / Globe monitoring scaffold
-- `Services/AudioRecorder.swift`: AVAudioEngine recorder
-- `Services/TranscriptionEngines.swift`: OpenAI and whisper.cpp engines
-- `Services/FormatterPipeline.swift`: rules for cleanup and styles
-- `Services/InsertionService.swift`: Accessibility insertion and clipboard fallback
-- `Services/OverlayController.swift`: floating listening HUD
-- `Services/DataStore.swift`: JSON persistence
-- `Views/*`: app UI
+6. **Clipboard fallback behavior**
+   - In an app with no editable target, capture text and confirm:
+     - if fallback enabled: status becomes `Clipboard` and clipboard has content.
+     - if fallback disabled: status becomes `Failed`.
+   - `Show captured toast` setting shows toast after clipboard capture.
 
-## Practical warnings
+7. **Settings + retention**
+   - Toggle Capture/Insertion/Data settings and ensure they persist.
+   - Set short retention window and verify old captures are purged on new capture.
+   - Use “Clear History” with confirmation.
 
-- Fn / Globe can conflict with emoji, Dictation, or keyboard shortcuts. open-wispr explicitly tells users to set Globe to `Do Nothing` if the key triggers the emoji picker.
-- Accessibility insertion will work in many Cocoa apps, but not all. Keep clipboard fallback as a first-class path.
-- Local whisper.cpp is strong for privacy, but OpenAI usually wins on setup speed and accuracy.
+8. **Notes**
+   - Save to notes from a Home history row.
+   - Edit and delete notes.
+   - Confirm note list updates with title + timestamp.
+
+9. **No-sync check**
+   - Confirm no network sync actions are attempted and history stays local to machine.

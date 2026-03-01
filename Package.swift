@@ -2,28 +2,33 @@
 import PackageDescription
 
 #if os(macOS)
-let executableTargetName = "Verbum"
+let executableTargetName = "Verbatim"
 let executableTarget: Target = .executableTarget(
     name: executableTargetName,
-    path: "Sources/Verbum"
+    path: "Sources/Verbatim"
 )
 #else
 let executableTargetName = "VerbumLinuxShim"
 let executableTarget: Target = .executableTarget(
     name: executableTargetName,
-    path: "Sources/VerbumLinuxShim"
+    path: "Sources/VerbatimLinuxShim"
 )
 #endif
 
 let package = Package(
-    name: "Verbum",
+    name: "Verbatim",
     platforms: [
-        .macOS(.v13)
+        .macOS(.v14)
     ],
     products: [
-        .executable(name: "Verbum", targets: [executableTargetName])
+        .executable(name: "Verbatim", targets: [executableTargetName])
     ],
     targets: [
-        executableTarget
+        executableTarget,
+        .testTarget(
+            name: "VerbatimTests",
+            dependencies: ["Verbatim"],
+            path: "Tests/VerbatimAppTests"
+        )
     ]
 )

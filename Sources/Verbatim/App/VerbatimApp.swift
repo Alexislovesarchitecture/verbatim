@@ -1,43 +1,44 @@
-import AppKit
 import SwiftUI
 
 @main
 struct VerbatimApp: App {
-    @StateObject private var store = VerbatimStore()
+    @StateObject private var appState = AppState()
 
     var body: some Scene {
         WindowGroup("Verbatim") {
-            RootView()
-                .environmentObject(store)
-                .frame(minWidth: 1080, minHeight: 720)
+            ShellRootView()
+                .environmentObject(appState)
+                .frame(minWidth: 1120, minHeight: 760)
+                .onAppear { appState.startRuntimeServices() }
+                .onDisappear { appState.stopRuntimeServices() }
         }
-        .windowResizability(.contentSize)
 
-        MenuBarExtra {
+        MenuBarExtra("Verbatim", systemImage: appState.coordinator.uiState.icon) {
             VStack(alignment: .leading, spacing: 12) {
-                Label(store.listeningState.title, systemImage: "waveform")
+                Text("Capture")
                     .font(.headline)
-                Text("Last capture backup is available from the clipboard fallback.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button("Start listening") {
+                    appState.coordinator.startListening()
+                }
+                Button("Lock listening") {
+                    appState.coordinator.lockListening()
+                }
+                Button("Stop listening") {
+                    appState.coordinator.stopListening()
+                }
+                Button("Copy last capture") {
+                    appState.coordinator.copyLastCapture()
+                }
                 Divider()
-                Button("Start listening") { store.startListening(lockMode: false) }
-                Button("Lock listening") { store.startListening(lockMode: true) }
-                Button("Copy last capture") { store.copyLastCaptureToClipboard() }
-                Divider()
-                Button("Open Verbatim") { store.activeSection = .home }
-                Button("Quit Verbatim") { NSApplication.shared.terminate(nil) }
+                Button("Open Verbatim") {
+                    NSApp.activate(ignoringOtherApps: true)
+                }
+                Button("Quit") {
+                    NSApplication.shared.terminate(nil)
+                }
             }
             .padding(12)
-            .frame(width: 280)
-        } label: {
-            Image(systemName: store.listeningState == .recording || store.listeningState == .recordingLocked ? "waveform.circle.fill" : "waveform.circle")
-        }
-
-        Settings {
-            SettingsView()
-                .environmentObject(store)
-                .frame(width: 640, height: 520)
+            .frame(width: 220)
         }
     }
 }
