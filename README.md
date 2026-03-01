@@ -1,6 +1,6 @@
-# Verbum
+# Verbatim
 
-Verbum is a macOS dictation app scaffold inspired by Wispr Flow, FreeFlow, open-wispr, and OpenSuperWhisper.
+Verbatim is a macOS dictation app scaffold inspired by Wispr Flow, FreeFlow, open-wispr, and OpenSuperWhisper.
 
 This package includes:
 - a native SwiftUI sidebar app shell
@@ -40,8 +40,8 @@ Needs live testing on a real Mac:
 
 ### Verbatim build path (implemented)
 
-This repo is built from `Sources/Verbum` only.  
-`Sources/VerbumApp` is retained as a historical duplicate and is not part of the package target.
+This repo is built from `Sources/Verbatim` only.  
+`Sources/VerbatimApp` is retained as a historical duplicate and is not part of the package target.
 
 #### 1) Fastest macOS run
 
@@ -49,7 +49,7 @@ From project root:
 
 ```bash
 cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim
-./scripts/build-verbum.sh
+./scripts/build-verbatim.sh
 ```
 
 Then in Xcode:
@@ -64,19 +64,19 @@ Then in Xcode:
 #### 2) Manual path (no `xcodegen`)
 
 1. Create a new macOS App in Xcode (SwiftUI).
-2. Add only `Sources/Verbum` to the target.
-3. Confirm product/module name is `Verbum`.
+2. Add only `Sources/Verbatim` to the target.
+3. Confirm product/module name is `Verbatim`.
 4. Apply the same permissions and run.
 
 ### Fastest
 1. Install Xcode.
 2. Install XcodeGen if you want a ready macOS app project.
-3. Run `./scripts/build-verbum.sh`.
+3. Run `./scripts/build-verbatim.sh`.
 4. Build and run in Xcode.
 
 ### Without XcodeGen (legacy)
-1. Create a new macOS App in Xcode named `Verbum`.
-2. Drag everything from `Sources/Verbum` into the project.
+1. Create a new macOS App in Xcode named `Verbatim`.
+2. Drag everything from `Sources/Verbatim` into the project.
 3. Disable App Sandbox for local testing.
 4. Add microphone and accessibility usage descriptions to the target Info.
 5. Build and run.
@@ -96,13 +96,14 @@ Then in Xcode:
 ### OpenAI mode
 - provider: OpenAI
 - model: `gpt-4o-mini-transcribe`
-- add your API key in Settings
+- add your API key in Settings, or set `OPENAI_API_KEY` in your shell/environment
+- for local setup, copy `.env.example` to `.env` and set `OPENAI_API_KEY=...` (never commit `.env`)
 - optional formatter prompt bias: your name, company names, client jargon
 
 ### Local mode
 - install whisper.cpp
-- point Verbum at `whisper-cli`
-- point Verbum at a local ggml model file such as `base.en`
+- point Verbatim at `whisper-cli`
+- point Verbatim at a local ggml model file such as `base.en`
 
 ## Why the architecture looks like this
 
@@ -112,7 +113,7 @@ Reference products point to the same pattern:
 - OpenSuperWhisper supports global shortcuts, hold-to-record, and multiple transcription engines.
 - Apple Writing Tools overlap with cleanup and rewrite, but not with push-to-talk anywhere.
 
-That is why Verbum is split into five swappable modules:
+That is why Verbatim is split into five swappable modules:
 1. Hotkey and capture
 2. Transcription
 3. Formatting
@@ -131,8 +132,8 @@ That is why Verbum is split into five swappable modules:
 
 ## Files
 
-- `App/VerbumApp.swift`: app entry point
-- `App/VerbumStore.swift`: main coordinator and state machine
+- `App/VerbatimApp.swift`: app entry point
+- `App/VerbatimStore.swift`: main coordinator and state machine
 - `Models/Models.swift`: app models and settings
 - `Services/HotkeyMonitor.swift`: Fn / Globe monitoring scaffold
 - `Services/AudioRecorder.swift`: AVAudioEngine recorder

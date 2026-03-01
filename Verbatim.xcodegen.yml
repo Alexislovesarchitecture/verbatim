@@ -1,0 +1,25 @@
+name: Verbatim
+options:
+  minimumXcodeGenVersion: 2.38.0
+settings:
+  base:
+    SWIFT_VERSION: 5.10
+    MACOSX_DEPLOYMENT_TARGET: 13.0
+    PRODUCT_BUNDLE_IDENTIFIER: com.studiobluework.verbatim
+    PRODUCT_NAME: Verbatim
+    GENERATE_INFOPLIST_FILE: YES
+    INFOPLIST_KEY_CFBundleDisplayName: Verbatim
+    INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.productivity
+    INFOPLIST_KEY_NSMicrophoneUsageDescription: Verbatim records audio so it can transcribe your speech into text.
+    INFOPLIST_KEY_NSAppleEventsUsageDescription: Verbatim uses Accessibility and Apple events to paste or insert dictated text into the active app.
+    CODE_SIGN_STYLE: Automatic
+    ENABLE_APP_SANDBOX: NO
+targets:
+  Verbatim:
+    type: application
+    platform: macOS
+    deploymentTarget: "13.0"
+    sources:
+      - Sources/Verbatim
+    scheme:
+      testTargets: []

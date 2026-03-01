@@ -1,4 +1,4 @@
-# Verbum architecture
+# Verbatim architecture
 
 ## Product goal
 
@@ -73,7 +73,7 @@ If Fn proves inconsistent in real-world use, switch to a lower-level `CGEvent` t
 
 ### Permissions
 
-Verbum should prompt for:
+Verbatim should prompt for:
 
 - microphone
 - accessibility

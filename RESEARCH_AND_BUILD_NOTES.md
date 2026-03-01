@@ -1,4 +1,4 @@
-# Verbum research and build notes
+# Verbatim research and build notes
 
 This folder is the practical output of comparing four reference points:
 
@@ -7,7 +7,7 @@ This folder is the practical output of comparing four reference points:
 - open-wispr: reference for a lightweight local-first architecture using whisper.cpp, Metal, Globe hold-to-talk, a menu bar waveform, and a service-like background model.
 - OpenSuperWhisper: reference for multiple engines, hold-to-record, global shortcuts, and file transcription in a GUI app.
 
-## What Verbum copies on purpose
+## What Verbatim copies on purpose
 
 - Fn or Globe as the primary trigger
 - press-to-talk, release-to-stop
@@ -19,7 +19,7 @@ This folder is the practical output of comparing four reference points:
 - a Home timeline so captures are recoverable
 - Dictionary, Snippets, Style, and Notes as first-class screens
 
-## What Verbum does differently
+## What Verbatim does differently
 
 - It keeps the transcription layer swappable.
 - It treats clipboard fallback as a core path, not an error case.
@@ -38,4 +38,4 @@ This folder is the practical output of comparing four reference points:
 
 ## Why the clipboard fallback matters
 
-Your must-have is correct: if you start talking before the target field is ready, the app should still keep the capture. That means recording must be independent from insertion. Verbum follows that separation.
+Your must-have is correct: if you start talking before the target field is ready, the app should still keep the capture. That means recording must be independent from insertion. Verbatim follows that separation.
