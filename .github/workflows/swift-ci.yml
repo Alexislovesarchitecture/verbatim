@@ -1,0 +1,18 @@
+name: Swift CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Xcode
+        run: |
+          xcode-select -p
+      - name: Resolve and build
+        run: swift build --product Verbum

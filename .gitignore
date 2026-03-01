@@ -1,0 +1,9 @@
+# macOS build artifacts
+/.build/
+/.swiftpm/
+/Verbum.xcodeproj/
+/Verbum.xcodeproj/project.xcworkspace/
+/Verbum.xcodeproj/xcuserdata/
+/build/
+/DerivedData/
+*.DS_Store
