@@ -1,11 +1,13 @@
-# macOS build artifacts
-/.build/
-/.swiftpm/
-/Verbum.xcodeproj/
-/Verbum.xcodeproj/project.xcworkspace/
-/Verbum.xcodeproj/xcuserdata/
-/build/
-/DerivedData/
-*.DS_Store
-.env
-.env.local
+# SwiftPM / Xcode
+.build/
+.swiftpm/
+*.build/
+DerivedData/
+build/
+
+# SwiftPM artifacts and metadata (local machine)
+.build
+.build/*
+
+# macOS
+.DS_Store
