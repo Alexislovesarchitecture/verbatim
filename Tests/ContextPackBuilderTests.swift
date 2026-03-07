@@ -32,5 +32,9 @@ final class ContextPackBuilderTests: XCTestCase {
         XCTAssertEqual(context.glossary.count, 1)
         XCTAssertEqual(context.glossary.first?.to, "ADU")
         XCTAssertEqual(context.sessionMemory.count, 3)
+        XCTAssertEqual(context.outputFormat, .auto)
+        XCTAssertEqual(context.selfCorrectionMode, .keepFinal)
+        XCTAssertTrue(context.flagLowConfidenceWords)
+        XCTAssertEqual(context.reasoningEffort, .modelDefault)
     }
 }

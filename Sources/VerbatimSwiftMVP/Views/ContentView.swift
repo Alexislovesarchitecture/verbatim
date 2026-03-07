@@ -930,7 +930,7 @@ struct ContentView: View {
                     .font(.caption)
                     .foregroundStyle(VerbatimPalette.mutedInk)
             } else {
-                Text("Local logic uses `ollama run` and falls back to raw text if JSON repair fails.")
+                Text("Local logic uses Ollama with hidden thinking by default, then returns only the cleaned transcript.")
                     .font(.caption)
                     .foregroundStyle(VerbatimPalette.mutedInk)
             }
@@ -1059,6 +1059,12 @@ struct ContentView: View {
 
             if !viewModel.canConfigureReasoningEffort && viewModel.logicMode == .remote {
                 Text("Reasoning effort applies to GPT-5 logic models.")
+                    .font(.caption2)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            }
+
+            if viewModel.logicMode == .local, viewModel.canConfigureReasoningEffort {
+                Text("For local GPT OSS, this maps to Ollama's thinking level. Visible thinking stays hidden so only the final cleaned text lands in the transcript.")
                     .font(.caption2)
                     .foregroundStyle(VerbatimPalette.mutedInk)
             }

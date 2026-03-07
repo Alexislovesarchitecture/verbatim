@@ -486,8 +486,13 @@ final class TranscriptionViewModel: ObservableObject {
     }
 
     var canConfigureReasoningEffort: Bool {
-        guard logicMode == .remote, let modelID = selectedLogicModel?.id else { return false }
-        return modelID.hasPrefix("gpt-5")
+        guard let modelID = selectedLogicModel?.id else { return false }
+        switch logicMode {
+        case .remote:
+            return modelID.hasPrefix("gpt-5")
+        case .local:
+            return modelID.hasPrefix("gpt-oss")
+        }
     }
 
     var localLogicRuntimeStatusMessage: String {

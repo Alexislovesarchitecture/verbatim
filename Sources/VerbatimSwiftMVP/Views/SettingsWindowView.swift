@@ -59,7 +59,7 @@ struct SettingsWindowView: View {
     @EnvironmentObject private var viewModel: TranscriptionViewModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
-    @State private var selectedSection: SettingsSection? = .general
+    @State private var selectedSection: SettingsSection = .general
 
     var body: some View {
         ZStack {
@@ -81,22 +81,48 @@ struct SettingsWindowView: View {
     }
 
     private var settingsSidebar: some View {
-        List(SettingsSection.allCases, selection: $selectedSection) { section in
-            Label(section.title, systemImage: section.systemImage)
-                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                .foregroundStyle(VerbatimPalette.ink)
-                .tag(Optional(section))
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 12) {
+                sidebarHeader
+                    .padding(.bottom, 6)
+
+                VStack(spacing: 10) {
+                    ForEach(SettingsSection.allCases) { section in
+                        Button {
+                            selectedSection = section
+                        } label: {
+                            HStack(spacing: 10) {
+                                Image(systemName: section.systemImage)
+                                    .font(.system(size: 14, weight: .semibold))
+
+                                Text(section.title)
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+
+                                Spacer()
+                            }
+                            .foregroundStyle(
+                                selectedSection == section
+                                    ? section.accent.tint
+                                    : VerbatimPalette.ink.opacity(0.84)
+                            )
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(
+                            VerbatimRailButtonStyle(
+                                isActive: selectedSection == section,
+                                accent: section.accent
+                            )
+                        )
+                        .accessibilityLabel(section.title)
+                        .help(section.subtitle)
+                    }
+                }
+            }
+            .padding(14)
         }
-        .listStyle(.sidebar)
         .navigationSplitViewColumnWidth(min: 220, ideal: 238, max: 260)
-        .scrollContentBackground(.hidden)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(sidebarBackground)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            sidebarHeader
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
-                .padding(.bottom, 8)
-        }
     }
 
     private var sidebarHeader: some View {
@@ -154,57 +180,55 @@ struct SettingsWindowView: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 22) {
-                    if let section = selectedSection {
-                        detailHeader(for: section)
+                    detailHeader(for: selectedSection)
 
-                        switch section {
-                        case .general:
-                            LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
-                                hotkeyCapturePanel
-                                interactionPreferencesPanel
-                            }
-                            .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
-
-                            if !viewModel.hotkeyPermissionGranted {
-                                permissionPanel
-                                    .applyLiquidCardStyle(cornerRadius: 28, tone: .cream, padding: 22)
-                            }
-                        case .transcription:
-                            LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
-                                transcriptionModeCard
-
-                                if viewModel.transcriptionMode == .remote {
-                                    apiKeyCard
-                                } else {
-                                    localTranscriptionOverviewCard
-                                }
-                            }
-                            .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
-
-                            VStack(spacing: 18) {
-                                transcriptionModelCard
-
-                                if viewModel.transcriptionMode == .remote, viewModel.selectedTranscriptionModel != nil {
-                                    transcriptionOptionsCard
-                                }
-                            }
-                            .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
-                        case .logic:
-                            LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
-                                logicModeCard
-
-                                if viewModel.logicMode == .remote {
-                                    apiKeyCard
-                                }
-                            }
-                            .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
-
-                            VStack(spacing: 18) {
-                                logicModelSelectionCard
-                                logicPreferencesCard
-                            }
-                            .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
+                    switch selectedSection {
+                    case .general:
+                        LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
+                            hotkeyCapturePanel
+                            interactionPreferencesPanel
                         }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
+
+                        if !viewModel.hotkeyPermissionGranted {
+                            permissionPanel
+                                .applyLiquidCardStyle(cornerRadius: 28, tone: .cream, padding: 22)
+                        }
+                    case .transcription:
+                        LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
+                            transcriptionModeCard
+
+                            if viewModel.transcriptionMode == .remote {
+                                apiKeyCard
+                            } else {
+                                localTranscriptionOverviewCard
+                            }
+                        }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
+
+                        VStack(spacing: 18) {
+                            transcriptionModelCard
+
+                            if viewModel.transcriptionMode == .remote, viewModel.selectedTranscriptionModel != nil {
+                                transcriptionOptionsCard
+                            }
+                        }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
+                    case .logic:
+                        LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
+                            logicModeCard
+
+                            if viewModel.logicMode == .remote {
+                                apiKeyCard
+                            }
+                        }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
+
+                        VStack(spacing: 18) {
+                            logicModelSelectionCard
+                            logicPreferencesCard
+                        }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
                     }
                 }
                 .padding(22)
@@ -589,7 +613,7 @@ struct SettingsWindowView: View {
                     .font(.caption)
                     .foregroundStyle(VerbatimPalette.mutedInk)
             } else {
-                Text("Local logic uses `ollama run` and falls back to raw text if JSON repair fails.")
+                Text("Local logic uses Ollama with hidden thinking by default, then returns only the cleaned transcript.")
                     .font(.caption)
                     .foregroundStyle(VerbatimPalette.mutedInk)
             }
@@ -717,6 +741,12 @@ struct SettingsWindowView: View {
 
             if !viewModel.canConfigureReasoningEffort && viewModel.logicMode == .remote {
                 Text("Reasoning effort applies to GPT-5 logic models.")
+                    .font(.caption2)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            }
+
+            if viewModel.logicMode == .local, viewModel.canConfigureReasoningEffort {
+                Text("For local GPT OSS, this maps to Ollama's thinking level. Visible thinking stays hidden so only the final cleaned text lands in the transcript.")
                     .font(.caption2)
                     .foregroundStyle(VerbatimPalette.mutedInk)
             }

@@ -1,0 +1,1 @@
+General Dictation Test. Today is Saturday, March 7th, 2026. Start recording should react immediately and not freeze.

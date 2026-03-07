@@ -24,6 +24,10 @@ final class ContextPackBuilder {
             punctuationMode: logicSettings.outputFormat == .paragraph ? "sentence" : "auto",
             fillerRemovalEnabled: logicSettings.removeFillerWords,
             autoDetectLists: logicSettings.autoDetectLists,
+            outputFormat: logicSettings.outputFormat,
+            selfCorrectionMode: logicSettings.selfCorrectionMode,
+            flagLowConfidenceWords: logicSettings.flagLowConfidenceWords,
+            reasoningEffort: logicSettings.reasoningEffort,
             glossary: relevantGlossary,
             sessionMemory: sessionMemory
         )

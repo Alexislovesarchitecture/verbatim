@@ -1,0 +1,89 @@
+{
+  "duration": null,
+  "segments": [
+    {
+      "id": "seg_0",
+      "end": 6.499999999999999,
+      "speaker": "permit",
+      "start": 0.10000000000000009,
+      "text": " Kermit Review Test.--The a d u at three zero four North Crane requires Title twenty four,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_1",
+      "end": 7.8999999999999995,
+      "speaker": "permit",
+      "start": 7.05,
+      "text": " Taldreen notes,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_2",
+      "end": 8.950000000000001,
+      "speaker": "permit",
+      "start": 8.3,
+      "text": " smoke alarms,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_3",
+      "end": 10.5,
+      "speaker": "permit",
+      "start": 9.4,
+      "text": " carbon monoxide alarms,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_4",
+      "end": 12.549999999999999,
+      "speaker": "permit",
+      "start": 10.95,
+      "text": " and an updated corrections matrix.",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_5",
+      "end": 14.95,
+      "speaker": "action",
+      "start": 12.85,
+      "text": " ACTION ITEMS TEST First,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_6",
+      "end": 17.65,
+      "speaker": "action",
+      "start": 15.349999999999998,
+      "text": " call the structural engineer; second,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_7",
+      "end": 20.9,
+      "speaker": "action",
+      "start": 18.099999999999998,
+      "text": " update sheet a one point zero; third,",
+      "type": "transcript.text.segment"
+    },
+    {
+      "id": "seg_8",
+      "end": 23.95,
+      "speaker": "action",
+      "start": 21.349999999999998,
+      "text": " resend the corrections response by four thirty p m",
+      "type": "transcript.text.segment"
+    }
+  ],
+  "task": null,
+  "text": "Kermit Review Test .--The a d u at three zero four North Crane requires Title twenty four, Taldreen notes, smoke alarms, carbon monoxide alarms, and an updated corrections matrix. ACTION ITEMS TEST First, call the structural engineer; second, update sheet a one point zero; third, resend the corrections response by four thirty p m",
+  "usage": {
+    "input_tokens": 427,
+    "output_tokens": 739,
+    "total_tokens": 1166,
+    "type": "tokens",
+    "input_token_details": {
+      "audio_tokens": 403,
+      "text_tokens": 24
+    }
+  }
+}

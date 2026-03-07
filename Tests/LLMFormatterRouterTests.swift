@@ -31,6 +31,10 @@ final class LLMFormatterRouterTests: XCTestCase {
             punctuationMode: "sentence",
             fillerRemovalEnabled: true,
             autoDetectLists: false,
+            outputFormat: .auto,
+            selfCorrectionMode: .keepFinal,
+            flagLowConfidenceWords: false,
+            reasoningEffort: .modelDefault,
             glossary: [],
             sessionMemory: []
         )

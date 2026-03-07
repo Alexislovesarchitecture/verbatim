@@ -28,6 +28,8 @@
 | 2026-03-05 | self | Reached for `python` when running the shared imagegen skill CLI, but this environment only exposes `python3`/`uv run ... python` | For skill CLIs in this repo, prefer `uv run --with ... python <script>` first; fall back to `python3` instead of assuming `python` exists |
 | 2026-03-05 | self | The first `swift test` attempt failed with `input file ... was modified during the build` for the generated package runner even though source compilation was clean | If SwiftPM reports an object file changed during link on this machine, rerun the same build/test once before treating it as a code regression |
 | 2026-03-06 | self | While refactoring `AudioRecorderService`, I moved tap IO off the main actor but initially forgot to recreate the local `AVAudioConverter` before wiring the stream state | After recorder or stream setup refactors, re-open the whole `startRecording()` flow top-to-bottom and verify resource creation order before rebuilding |
+| 2026-03-07 | self | Live mic conversion to interleaved `pcmFormatInt16` failed inside `AVAudioConverter.convert(to:from:)` and stalled recording on start | Keep the live converter on mono `pcmFormatFloat32` and quantize to PCM16 manually after conversion instead of asking `AVAudioConverter` for direct `Int16` tap output |
+| 2026-03-07 | self | Diarization evaluation failed when I reused full-length speaker reference clips; the API rejected known speaker references longer than the supported range | Keep known-speaker reference clips trimmed to roughly 1.2–10 seconds before exercising `gpt-4o-transcribe-diarize` with speaker hints |
 
 ## User Preferences
 - Keep successful behavior intact and layer visual enhancements instead of feature rewrites.
@@ -52,6 +54,7 @@
 - After broad scripted edits, use `git diff --name-only` and `git restore --worktree <file>` to quickly drop collateral edits while preserving unrelated staged work.
 - For architecture refactors in this app, extract protocols around recorder/catalog/store/context services first; that makes the coordinator and post-transcription pipeline testable without going through the SwiftUI view model.
 - For third-party skill installs on this machine, validate the source `SKILL.md` first and use `install-skill-from-github.py --method git` when Python SSL certificate validation breaks the download path.
+- For local GPT OSS cleanup here, the settings UI can exist before the behavior is real; carry logic settings through `ContextPack`, map local reasoning to Ollama `--think`, and hide visible thinking by default so dictated text is not polluted with model commentary.
 
 ## Patterns That Don't Work
 - Skipping persistent notes setup causes avoidable process drift.

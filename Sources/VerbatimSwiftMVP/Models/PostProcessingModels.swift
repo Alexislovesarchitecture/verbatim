@@ -65,6 +65,10 @@ struct ContextPack: Codable, Sendable {
     let punctuationMode: String
     let fillerRemovalEnabled: Bool
     let autoDetectLists: Bool
+    let outputFormat: LogicOutputFormat
+    let selfCorrectionMode: SelfCorrectionMode
+    let flagLowConfidenceWords: Bool
+    let reasoningEffort: LogicReasoningEffort
     let glossary: [GlossaryEntry]
     let sessionMemory: [String]
 
@@ -83,6 +87,10 @@ struct ContextPack: Codable, Sendable {
             punctuationMode,
             fillerRemovalEnabled ? "1" : "0",
             autoDetectLists ? "1" : "0",
+            outputFormat.rawValue,
+            selfCorrectionMode.rawValue,
+            flagLowConfidenceWords ? "1" : "0",
+            reasoningEffort.rawValue,
             glossarySignature,
             sessionSignature,
         ].joined(separator: "::")
