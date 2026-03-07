@@ -1,10 +1,8 @@
 import Foundation
 import AVFoundation
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
-protocol TranscriptionServiceProtocol {
-    func transcribe(audioFileURL: URL, apiKey: String?, options: TranscriptionRequestOptions) async throws -> Transcript
+protocol TranscriptionServiceProtocol: TranscriptionEngine {
+    func transcribe(audioFileURL: URL, apiKey: String?, options: TranscriptionOptions) async throws -> Transcript
 }
 
 enum OpenAITranscriptionError: LocalizedError {
@@ -50,17 +48,261 @@ private struct OpenAIErrorResponse: Decodable {
     let error: APIError
 }
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
-final class OpenAITranscriptionService: TranscriptionServiceProtocol {
-    private let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
-    private let session: URLSession
+struct OpenAIStreamingEventDecoder {
+    func decodeTranscriptEvents(
+        payload: String,
+        eventID: String?,
+        fallbackEventIndex: Int,
+        modelID: String,
+        responseFormat: String
+    ) throws -> [TranscriptEvent] {
+        guard let data = payload.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return []
+        }
 
-    init(session: URLSession = .shared) {
-        self.session = session
+        if let error = object["error"] as? [String: Any] {
+            let message = error["message"] as? String ?? "Unknown streaming error."
+            throw OpenAITranscriptionError.serverError(status: 500, message: message)
+        }
+
+        let type = (object["type"] as? String)?.lowercased() ?? ""
+        let baseEventID = eventID ?? "stream_\(fallbackEventIndex)"
+        var events: [TranscriptEvent] = []
+
+        if let deltaText = extractDeltaText(from: object, eventType: type),
+           !deltaText.isEmpty {
+            events.append(.delta(TranscriptDelta(id: "\(baseEventID):delta", text: deltaText)))
+        }
+
+        let segments = parseSegments(from: object, fallbackEventID: baseEventID)
+        events.append(contentsOf: segments.map(TranscriptEvent.segment))
+
+        let completionSignal = type.contains("completed")
+            || type.contains("done")
+            || type.contains("final")
+        let hasFinalText = object["text"] is String || object["transcript"] is String
+        if completionSignal || (hasFinalText && !type.contains("delta")) {
+            let text = resolveFinalText(from: object, fallbackSegments: segments)
+            if !text.isEmpty || !segments.isEmpty {
+                events.append(
+                    .done(
+                        Transcript(
+                            rawText: text,
+                            segments: segments,
+                            tokenLogprobs: nil,
+                            lowConfidenceSpans: [],
+                            modelID: modelID,
+                            responseFormat: responseFormat
+                        )
+                    )
+                )
+            }
+        }
+
+        return events
     }
 
-    func transcribe(audioFileURL: URL, apiKey: String?, options: TranscriptionRequestOptions) async throws -> Transcript {
+    func syntheticSegmentID(from object: [String: Any], fallbackEventID: String, ordinal: Int) -> String {
+        if let id = object["id"] as? String, !id.isEmpty {
+            return id
+        }
+        if let id = object["segment_id"] as? String, !id.isEmpty {
+            return id
+        }
+        if let index = object["index"] as? Int {
+            return "segment_\(index)"
+        }
+
+        let text = (object["text"] as? String) ?? (object["transcript"] as? String) ?? ""
+        let speaker = object["speaker"] as? String ?? ""
+        let start = decodeDouble(object["start"]) ?? decodeDouble(object["start_time"])
+        let end = decodeDouble(object["end"]) ?? decodeDouble(object["end_time"])
+        let startText = start.map { String($0) } ?? "nil"
+        let endText = end.map { String($0) } ?? "nil"
+        let digest = stableDigest("\(fallbackEventID)|\(ordinal)|\(startText)|\(endText)|\(speaker)|\(text)")
+        return "segment_\(digest)"
+    }
+
+    private func parseSegments(from object: [String: Any], fallbackEventID: String) -> [TranscriptSegment] {
+        var orderedIDs: [String] = []
+        var segmentsByID: [String: TranscriptSegment] = [:]
+        let hasNestedSegments = object["segment"] != nil || object["segments"] != nil || object["output"] != nil
+
+        func collect(_ value: Any?, ordinal: Int) {
+            guard let segment = parseSegment(from: value, fallbackEventID: fallbackEventID, ordinal: ordinal) else {
+                return
+            }
+            if segmentsByID[segment.id] == nil {
+                orderedIDs.append(segment.id)
+            }
+            segmentsByID[segment.id] = segment
+        }
+
+        collect(object["segment"], ordinal: 0)
+
+        if let segmentArray = object["segments"] as? [Any] {
+            for (index, value) in segmentArray.enumerated() {
+                collect(value, ordinal: index + 1)
+            }
+        }
+
+        if let outputArray = object["output"] as? [Any] {
+            for (index, value) in outputArray.enumerated() {
+                collect(value, ordinal: 100 + index)
+            }
+        }
+
+        if !hasNestedSegments {
+            collect(object, ordinal: 999)
+        }
+        return orderedIDs.compactMap { segmentsByID[$0] }
+    }
+
+    private func extractDeltaText(from object: [String: Any], eventType: String) -> String? {
+        if let delta = object["delta"] as? String {
+            return delta
+        }
+        if let deltaObject = object["delta"] as? [String: Any] {
+            if let text = deltaObject["text"] as? String {
+                return text
+            }
+            if let text = deltaObject["value"] as? String {
+                return text
+            }
+        }
+        if let textDelta = object["text_delta"] as? String {
+            return textDelta
+        }
+        if eventType.contains("delta"), let text = object["text"] as? String {
+            return text
+        }
+        return nil
+    }
+
+    private func parseSegment(from value: Any?, fallbackEventID: String, ordinal: Int) -> TranscriptSegment? {
+        guard let object = value as? [String: Any] else {
+            return nil
+        }
+
+        let text = (object["text"] as? String)
+            ?? (object["transcript"] as? String)
+            ?? ""
+        let speaker = object["speaker"] as? String
+        let start = decodeDouble(object["start"]) ?? decodeDouble(object["start_time"])
+        let end = decodeDouble(object["end"]) ?? decodeDouble(object["end_time"])
+
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && start == nil && end == nil {
+            return nil
+        }
+
+        return TranscriptSegment(
+            id: syntheticSegmentID(from: object, fallbackEventID: fallbackEventID, ordinal: ordinal),
+            start: start,
+            end: end,
+            speaker: speaker,
+            text: text
+        )
+    }
+
+    private func decodeDouble(_ value: Any?) -> Double? {
+        switch value {
+        case let number as NSNumber:
+            return number.doubleValue
+        case let text as String:
+            return Double(text)
+        default:
+            return nil
+        }
+    }
+
+    private func resolveFinalText(from object: [String: Any], fallbackSegments: [TranscriptSegment]) -> String {
+        if let text = object["text"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text
+        }
+        if let text = object["transcript"] as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text
+        }
+        if let finalObject = object["final"] as? [String: Any],
+           let text = finalObject["text"] as? String,
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return text
+        }
+        return fallbackSegments
+            .map(\.text)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+    }
+
+    private func stableDigest(_ value: String) -> String {
+        var hash: UInt64 = 14_695_981_039_346_656_037
+        for byte in value.utf8 {
+            hash ^= UInt64(byte)
+            hash &*= 1_099_511_628_211
+        }
+        return String(hash, radix: 16)
+    }
+}
+
+final class OpenAITranscriptionService: TranscriptionServiceProtocol, @unchecked Sendable {
+    let engineID = "openai-batch-sse"
+    let capabilities = EngineCapabilities(
+        supportsStreamingEvents: true,
+        supportsLiveAudioFrames: false,
+        supportsDiarization: true,
+        supportsLogprobs: true,
+        supportsTimestamps: true,
+        supportsPrompt: true
+    )
+
+    private let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
+    private let session: URLSession
+    private let sseParser: ServerSentEventParser
+    private let streamingEventDecoder: OpenAIStreamingEventDecoder
+
+    init(
+        session: URLSession = .shared,
+        sseParser: ServerSentEventParser = ServerSentEventParser(),
+        streamingEventDecoder: OpenAIStreamingEventDecoder = OpenAIStreamingEventDecoder()
+    ) {
+        self.session = session
+        self.sseParser = sseParser
+        self.streamingEventDecoder = streamingEventDecoder
+    }
+
+    func transcribeBatch(audioURL: URL, options: TranscriptionOptions) async throws -> Transcript {
+        try await transcribe(audioFileURL: audioURL, apiKey: options.apiKey, options: options)
+    }
+
+    func transcribeEvents(source: TranscriptionSource, options: TranscriptionOptions) -> AsyncThrowingStream<TranscriptEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    guard let audioURL = source.audioURL else {
+                        throw TranscriptionEngineError.missingAudioSource
+                    }
+
+                    if options.stream {
+                        try await emitStreamingEvents(
+                            audioFileURL: audioURL,
+                            options: options,
+                            continuation: continuation
+                        )
+                    } else {
+                        let transcript = try await transcribeBatch(audioURL: audioURL, options: options)
+                        continuation.yield(.done(transcript))
+                    }
+
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+
+    func transcribe(audioFileURL: URL, apiKey: String?, options: TranscriptionOptions) async throws -> Transcript {
         guard FileManager.default.fileExists(atPath: audioFileURL.path) else {
             throw OpenAITranscriptionError.missingAudioFile
         }
@@ -135,6 +377,134 @@ final class OpenAITranscriptionService: TranscriptionServiceProtocol {
             throw lastError
         }
         throw OpenAITranscriptionError.invalidResponse
+    }
+
+    private func emitStreamingEvents(
+        audioFileURL: URL,
+        options: TranscriptionOptions,
+        continuation: AsyncThrowingStream<TranscriptEvent, Error>.Continuation
+    ) async throws {
+        guard FileManager.default.fileExists(atPath: audioFileURL.path) else {
+            throw OpenAITranscriptionError.missingAudioFile
+        }
+
+        guard let model = ModelRegistry.entry(for: options.modelID), model.isEnabled else {
+            throw OpenAITranscriptionError.unsupportedModel(options.modelID)
+        }
+
+        let finalAPIKey = resolveApiKey(from: options.apiKey)
+        guard let finalAPIKey, !finalAPIKey.isEmpty else {
+            throw OpenAITranscriptionError.missingApiKey
+        }
+
+        guard isSupportedAudioFile(audioFileURL) else {
+            throw OpenAITranscriptionError.unsupportedAudioType(audioFileURL.pathExtension.lowercased())
+        }
+
+        let audioData = try Data(contentsOf: audioFileURL)
+        guard audioData.count <= ModelRegistry.minimumRemoteUploadBytes else {
+            throw OpenAITranscriptionError.uploadTooLarge
+        }
+
+        let duration = (try? audioDuration(audioFileURL: audioFileURL)) ?? 0
+        let shouldChunk = model.requiresChunkingStrategyForLongAudio && duration > 30
+        let context = ModelCapabilityConstraintContext(
+            from: options,
+            model: model,
+            shouldUseChunkingForLongAudio: shouldChunk
+        )
+
+        let request = try buildRequest(
+            audioFileURL: audioFileURL,
+            audioData: audioData,
+            modelID: model.id,
+            apiKey: finalAPIKey,
+            model: model,
+            responseFormat: context.responseFormat,
+            languageHint: options.languageHint,
+            includeLogprobs: context.includeLogprobs,
+            prompt: context.prompt,
+            stream: true,
+            timestampGranularities: context.timestampGranularities,
+            chunkingStrategy: context.chunkingStrategy,
+            diarizationEnabled: context.diarizationEnabled,
+            knownSpeakerNames: options.knownSpeakerNames,
+            knownSpeakerReferences: options.knownSpeakerReferences
+        )
+
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw OpenAITranscriptionError.invalidResponse
+        }
+
+        guard (200..<300).contains(http.statusCode) else {
+            var body = Data()
+            for try await byte in bytes {
+                body.append(byte)
+            }
+            let message = parseServerErrorMessage(from: body)
+            throw OpenAITranscriptionError.serverError(status: http.statusCode, message: message)
+        }
+
+        var mergedDraft = ""
+        var mergedSegmentOrder: [String] = []
+        var mergedSegments: [String: TranscriptSegment] = [:]
+        var emittedDone = false
+        var eventIndex = 0
+
+        for try await event in sseParser.parse(bytes: bytes) {
+            let payload = event.data.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !payload.isEmpty else { continue }
+            if payload == "[DONE]" { continue }
+            eventIndex += 1
+
+            let transcriptEvents = try streamingEventDecoder.decodeTranscriptEvents(
+                payload: payload,
+                eventID: event.id,
+                fallbackEventIndex: eventIndex,
+                modelID: model.id,
+                responseFormat: context.responseFormat
+            )
+
+            for transcriptEvent in transcriptEvents {
+                switch transcriptEvent {
+                case .delta(let delta):
+                    mergedDraft.append(delta.text)
+                case .segment(let segment):
+                    if mergedSegments[segment.id] == nil {
+                        mergedSegmentOrder.append(segment.id)
+                    }
+                    mergedSegments[segment.id] = segment
+                case .done:
+                    emittedDone = true
+                }
+                continuation.yield(transcriptEvent)
+            }
+        }
+
+        if !emittedDone {
+            let orderedSegments = mergedSegmentOrder.compactMap { mergedSegments[$0] }
+            let finalText = orderedSegments.isEmpty
+                ? mergedDraft
+                : orderedSegments
+                    .map(\.text)
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                    .joined(separator: "\n")
+
+            continuation.yield(
+                .done(
+                    Transcript(
+                        rawText: finalText,
+                        segments: orderedSegments,
+                        tokenLogprobs: nil,
+                        lowConfidenceSpans: [],
+                        modelID: model.id,
+                        responseFormat: context.responseFormat
+                    )
+                )
+            )
+        }
     }
 
     private func resolveApiKey(from apiKey: String?) -> String? {
@@ -492,13 +862,48 @@ private struct RemoteTranscriptResponse: Decodable {
 }
 
 private struct SegmentDTO: Decodable {
+    let id: String?
     let start: TimeInterval?
     let end: TimeInterval?
     let text: String?
     let speaker: String?
 
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case segmentID = "segment_id"
+        case index
+        case start
+        case end
+        case startTime = "start_time"
+        case endTime = "end_time"
+        case text
+        case transcript
+        case speaker
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let explicitID = try container.decodeIfPresent(String.self, forKey: .id) {
+            id = explicitID
+        } else if let segmentID = try container.decodeIfPresent(String.self, forKey: .segmentID) {
+            id = segmentID
+        } else if let index = try container.decodeIfPresent(Int.self, forKey: .index) {
+            id = "segment_\(index)"
+        } else {
+            id = nil
+        }
+
+        start = (try? container.decodeIfPresent(TimeInterval.self, forKey: .start))
+            ?? (try? container.decodeIfPresent(TimeInterval.self, forKey: .startTime))
+        end = (try? container.decodeIfPresent(TimeInterval.self, forKey: .end))
+            ?? (try? container.decodeIfPresent(TimeInterval.self, forKey: .endTime))
+        text = (try? container.decodeIfPresent(String.self, forKey: .text))
+            ?? (try? container.decodeIfPresent(String.self, forKey: .transcript))
+        speaker = try container.decodeIfPresent(String.self, forKey: .speaker)
+    }
+
     var transcriptSegment: TranscriptSegment {
-        TranscriptSegment(start: start, end: end, speaker: speaker, text: text ?? "")
+        TranscriptSegment(id: id ?? UUID().uuidString, start: start, end: end, speaker: speaker, text: text ?? "")
     }
 }
 

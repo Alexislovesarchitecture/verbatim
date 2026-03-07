@@ -8,14 +8,30 @@
 | 2026-03-03 | self | Tried using `remote.origin.pushurl` to redirect pushes while keeping `origin.url` on upstream; `--force-with-lease origin` compared lease against upstream tracking ref and rejected as stale | For fork workflows that use `--force-with-lease`, set `origin` to the writable fork and keep canonical repo as separate `upstream` remote |
 | 2026-03-03 | self | Used main-actor-isolated service initializers as default arguments in a main-actor view model init; Swift treated call-site as nonisolated and failed compile | Keep service types nonisolated unless actor isolation is required, or construct defaults inside initializer body |
 | 2026-03-03 | self | Mixed `HierarchicalShapeStyle` (`.secondary`) and `Color` (`.orange`) in one ternary for `.foregroundStyle` | Use explicit `Color.secondary` / `Color.orange` when mixing style branches |
+| 2026-03-04 | self | Reintroduced mixed `.foregroundStyle` ternary styles in `ContentView.swift`, breaking `swift build` | When writing ternaries for style/color, always use explicit `Color.*` in both branches and run a build immediately after UI edits |
 | 2026-03-03 | user | Friendly aliases (Mini/Turbo) were interpreted as desired labels, but user wants official model names only | Display OpenAI models exactly by API-provided model IDs; avoid custom marketing labels |
 | 2026-03-03 | self | Parsed `known_speaker_references` using comma splitting, which corrupts data URLs because they contain commas | Parse speaker references line-by-line only; keep comma splitting limited to speaker-name convenience input |
 | 2026-03-03 | self | `withCheckedThrowingContinuation` in a complex callback failed type inference after refactor | Use explicit continuation type (`CheckedContinuation<ExpectedType, Error>`) when inference becomes ambiguous |
 | 2026-03-03 | self | `@Published` `didSet` for `transcribeUseDiarization` called `applyTranscriptionModelSelectionDefaults()`, which reassigned the same property and caused infinite observer recursion + EXC_BAD_ACCESS on launch | In property observers that trigger normalization, gate recursive calls with `if oldValue != newValue` and make normalization idempotent |
 | 2026-03-03 | self | Logic formatting failed with API error `unsupported value 'none'` for `reasoning.effort` | Use only supported effort values (`minimal|low|medium|high`), send reasoning only for GPT-5 models, and add one fallback retry with `minimal` or no reasoning on 400 reasoning validation errors |
+| 2026-03-04 | self | Added a public/static helper that accepted a private enum parameter, causing module emit failure | Keep migration-only enums/helpers at matching access level (`private`/`fileprivate`) and run a build after refactoring Codable migration code |
+| 2026-03-03 | self | Pushes from diverged local history failed with `remote unpack failed` / missing object; normal and force pushes both rejected | When history is damaged, create a clean commit from `main^{tree}` with parent `origin/main` via `git commit-tree` and push that commit to `main` |
+| 2026-03-03 | self | Partial Swift file write from shell heredoc was truncated by quoting, leaving an incomplete source file | After large heredoc writes, immediately `cat`/verify file content before continuing and overwrite atomically if output is truncated |
+| 2026-03-04 | self | Announced that napkin was read, which violates the napkin skill instruction to apply it silently | Read and apply napkin rules without stating that action in user-facing updates |
+| 2026-03-04 | self | Introduced malformed Swift keypaths (`\\ .id`) while writing a new file quickly, which would fail compilation | After creating files via heredoc, immediately scan for escaped keypaths (`\\.`) and other syntax artifacts before proceeding |
+| 2026-03-04 | self | A bulk regex removed an iOS availability line incorrectly and produced `@availablefinal`, breaking syntax | After bulk annotation rewrites, run a fast syntax scan (`rg \"@availablefinal|@available\\(\"`) and repair malformed joins before continuing |
+| 2026-03-04 | self | Platform-annotation cleanup via regex caused wide declaration corruption (`@availableprotocol`, `@available@main`) | Prefer a single safe strategy: remove per-type availability annotations entirely when package platform already constrains target, then verify with `rg \"@available\"` and build |
+| 2026-03-05 | self | Repo build failed because core services carried stray `@available(macOS 26.0, *)` annotations while `Package.swift` still targeted macOS 14 | Keep Tahoe-only checks centralized in a shared platform wrapper/helper and strip 26-only annotations from non-UI services before refactors |
+| 2026-03-05 | self | Switched `Package.swift` to `.macOS(.v26)` and `swift-tools-version: 6.2`, which compiled the manifest but also upgraded SwiftPM language policy and exposed unrelated Swift 6 concurrency errors | For Tahoe-only targeting in this repo, keep `swift-tools-version: 5.9` and use `.macOS("26.0")` so deployment moves forward without pulling in a broader compiler-mode migration |
+| 2026-03-05 | self | Assumed a small Tahoe-only UI cleanup would preserve both build entry points, but `swift build` exposed unrelated modified service files while the Xcode app target still built cleanly | In this repo, verify `swift build`/`swift test` and `xcodebuild` separately after UI-only changes; a green app target does not prove the package target is green |
+| 2026-03-05 | self | `@MainActor` service types in default initializer arguments broke SwiftPM builds and tests even though constructing the same services inside the initializer body was valid | When a dependency is main-actor isolated, default the parameter to `nil` and instantiate it inside the `@MainActor` initializer body; mirror that isolation in tests instead of loosening the production types |
+| 2026-03-05 | self | Reached for `python` when running the shared imagegen skill CLI, but this environment only exposes `python3`/`uv run ... python` | For skill CLIs in this repo, prefer `uv run --with ... python <script>` first; fall back to `python3` instead of assuming `python` exists |
+| 2026-03-05 | self | The first `swift test` attempt failed with `input file ... was modified during the build` for the generated package runner even though source compilation was clean | If SwiftPM reports an object file changed during link on this machine, rerun the same build/test once before treating it as a code regression |
+| 2026-03-06 | self | While refactoring `AudioRecorderService`, I moved tap IO off the main actor but initially forgot to recreate the local `AVAudioConverter` before wiring the stream state | After recorder or stream setup refactors, re-open the whole `startRecording()` flow top-to-bottom and verify resource creation order before rebuilding |
 
 ## User Preferences
 - Keep successful behavior intact and layer visual enhancements instead of feature rewrites.
+- Prioritize information architecture over pure polish: the left rail should be brand + Home / Dictionary / Style, with model and app controls behind a bottom settings pop-up.
 - Keep OpenAI model names exactly as OpenAI provides them (no custom renaming).
 - Expose reasoning effort as an explicit user-facing selector in Logic settings (not just hidden defaults).
 - Prefer local model execution without localhost API dependency when possible.
@@ -23,9 +39,19 @@
 ## Patterns That Work
 - Inspect SwiftUI file structure first, then make minimal style-only diffs.
 - Use a reusable glass card modifier and button style so visual upgrades stay centralized and low-risk.
+- Load custom menu bar/listening icons from `Bundle.module` PNG resources and set `isTemplate = true` so AppKit tinting still works.
+- For macOS-native settings, use a dedicated `Settings` scene and trigger it from custom UI with `showSettingsWindow:` instead of building a faux settings popover.
 - For feature knobs like model selection, keep one typed enum shared across picker, persisted settings, and API request serialization.
 - For split-view settings UIs, keep selection state persisted in `UserDefaults` so users return to the last section/mode/model.
+- For Tahoe-native visual passes in this app, move glass adoption into `PlatformAppearance.swift` and wrap the top-level scene content in one `GlassEffectContainer` before touching individual cards.
+- For Tahoe-native layout cleanup here, prefer one glass surface per pane or section and let dense control groups live directly inside it instead of wrapping every subpanel in its own card.
+- For audio capture in this app, keep the `AVAudioEngine` tap’s file write and frame conversion off the main actor behind a small locked helper; routing each buffer back through `@MainActor` is a hang risk.
+- For translucent macOS window tuning in this app, ask for at least one screenshot with the desktop visible before adding synthetic background layers; black-background captures can misrepresent the actual glass effect.
 - For fork-only workflows, remove `upstream` and verify `git remote -v` plus `git branch -r` to ensure no stale upstream references remain.
+- For remote sync after history damage, push a synthetic linear commit (`commit-tree` with `origin/main` parent) instead of force-pushing broken ancestry.
+- After broad scripted edits, use `git diff --name-only` and `git restore --worktree <file>` to quickly drop collateral edits while preserving unrelated staged work.
+- For architecture refactors in this app, extract protocols around recorder/catalog/store/context services first; that makes the coordinator and post-transcription pipeline testable without going through the SwiftUI view model.
+- For third-party skill installs on this machine, validate the source `SKILL.md` first and use `install-skill-from-github.py --method git` when Python SSL certificate validation breaks the download path.
 
 ## Patterns That Don't Work
 - Skipping persistent notes setup causes avoidable process drift.
@@ -34,3 +60,4 @@
 - Repository is a SwiftUI app (`Package.swift`, `Sources/`).
 - Current task: add Apple-style Liquid Glass visual enhancements while preserving current functionality.
 - Model selection now uses `TranscriptionModel` and is persisted in user defaults.
+- Source tree currently contains duplicate backup Swift files with numeric suffixes (excluded in `Package.swift`); avoid editing those and keep architectural changes in canonical files.

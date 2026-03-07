@@ -1,5 +1,10 @@
 import Foundation
 
+@MainActor
+protocol ModelCatalogServiceProtocol {
+    func fetchRemoteModelIDs(apiKey: String?) async throws -> Set<String>
+}
+
 enum OpenAIModelCatalogError: LocalizedError {
     case missingApiKey
     case invalidResponse
@@ -29,9 +34,8 @@ private struct OpenAIModelListResponse: Decodable {
         let owned_by: String?
     }
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
-final class OpenAIModelCatalogService {
+@MainActor
+final class OpenAIModelCatalogService: ModelCatalogServiceProtocol {
     private let endpoint = URL(string: "https://api.openai.com/v1/models")!
     private let session: URLSession
     private var cachedModels: Set<String>?

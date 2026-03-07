@@ -1,9 +1,7 @@
 import Foundation
 import Speech
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
-protocol LocalTranscriptionServiceProtocol {
+protocol LocalTranscriptionServiceProtocol: TranscriptionEngine {
     func transcribeLocally(audioFileURL: URL, model: LocalTranscriptionModel) async throws -> Transcript
 }
 
@@ -38,14 +36,26 @@ enum LocalTranscriptionError: LocalizedError {
         }
     }
 }
+final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @unchecked Sendable {
+    let engineID = "apple-speech-ondevice"
+    let capabilities = EngineCapabilities(
+        supportsStreamingEvents: false,
+        supportsLiveAudioFrames: false,
+        supportsDiarization: false,
+        supportsLogprobs: false,
+        supportsTimestamps: true,
+        supportsPrompt: false
+    )
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
-final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol {
     private let locale: Locale
 
     init(locale: Locale = .current) {
         self.locale = locale
+    }
+
+    func transcribeBatch(audioURL: URL, options: TranscriptionOptions) async throws -> Transcript {
+        let selectedModel = LocalTranscriptionModel(rawValue: options.modelID) ?? .appleOnDevice
+        return try await transcribeLocally(audioFileURL: audioURL, model: selectedModel)
     }
 
     func transcribeLocally(audioFileURL: URL, model: LocalTranscriptionModel) async throws -> Transcript {
@@ -85,17 +95,17 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol {
 
         do {
             let result = try await recognize(request: request, recognizer: recognizer)
-            let transcriptText = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+            let transcriptText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !transcriptText.isEmpty else {
                 throw LocalTranscriptionError.noTranscriptionResult
             }
 
-            let segments = result.bestTranscription.segments.map { segment in
+            let segments = result.segments.map { segment in
                 TranscriptSegment(
-                    start: segment.timestamp,
-                    end: segment.timestamp + segment.duration,
+                    start: segment.start,
+                    end: segment.end,
                     speaker: nil,
-                    text: segment.substring
+                    text: segment.text
                 )
             }
 
@@ -115,7 +125,18 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol {
         }
     }
 
-    private func recognize(request: SFSpeechURLRecognitionRequest, recognizer: SFSpeechRecognizer) async throws -> SFSpeechRecognitionResult {
+    private struct RecognitionSnapshot: Sendable {
+        struct Segment: Sendable {
+            let start: TimeInterval
+            let end: TimeInterval
+            let text: String
+        }
+
+        let text: String
+        let segments: [Segment]
+    }
+
+    private func recognize(request: SFSpeechURLRecognitionRequest, recognizer: SFSpeechRecognizer) async throws -> RecognitionSnapshot {
         final class RecognitionState {
             private let lock = NSLock()
             private var didFinish = false
@@ -144,7 +165,7 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol {
             }
         }
 
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SFSpeechRecognitionResult, Error>) in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RecognitionSnapshot, Error>) in
             let state = RecognitionState()
 
             let recognitionTask = recognizer.recognitionTask(with: request) { result, error in
@@ -162,7 +183,19 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol {
                 if result.isFinal {
                     guard state.finishIfNeeded() else { return }
                     state.cancelTask()
-                    continuation.resume(returning: result)
+
+                    let transcription = result.bestTranscription
+                    let snapshot = RecognitionSnapshot(
+                        text: transcription.formattedString,
+                        segments: transcription.segments.map { segment in
+                            RecognitionSnapshot.Segment(
+                                start: segment.timestamp,
+                                end: segment.timestamp + segment.duration,
+                                text: segment.substring
+                            )
+                        }
+                    )
+                    continuation.resume(returning: snapshot)
                 }
             }
 

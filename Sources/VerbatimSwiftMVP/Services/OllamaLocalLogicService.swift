@@ -30,9 +30,16 @@ struct LocalLogicRuntimeStatus {
     let message: String
 }
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
-final class OllamaLocalLogicService {
+protocol LocalLLMRefineServiceProtocol: Sendable {
+    func refine(
+        deterministicText: String,
+        contextPack: ContextPack,
+        profile: PromptProfile,
+        modelID: String
+    ) async throws -> LLMResult
+}
+
+final class OllamaLocalLogicService: LocalLLMRefineServiceProtocol, @unchecked Sendable {
     private let ollamaBinaryName: String
 
     init(ollamaBinaryName: String = "ollama") {
@@ -84,6 +91,58 @@ final class OllamaLocalLogicService {
             throw LocalLogicError.missingTranscript
         }
 
+        let profile = PromptProfile(
+            id: "cleanup",
+            version: 1,
+            name: "Cleanup",
+            styleCategory: nil,
+            enabled: true,
+            outputMode: .text,
+            instructionPrefix: "You are a text cleanup assistant. Rules: Do not paraphrase or rewrite. Do not add new information or commitments. Apply the provided glossary mappings exactly (case-insensitive). Add only necessary punctuation and capitalization. Return only the corrected text. No commentary.",
+            schema: nil,
+            options: nil
+        )
+
+        let result = try await refine(
+            deterministicText: transcript.rawText,
+            contextPack: ContextPack(
+                activeAppName: "Unknown App",
+                bundleID: "unknown.bundle",
+                styleCategory: .other,
+                windowTitle: nil,
+                focusedElementRole: nil,
+                punctuationMode: settings.outputFormat == .paragraph ? "sentence" : "auto",
+                fillerRemovalEnabled: settings.removeFillerWords,
+                autoDetectLists: settings.autoDetectLists,
+                glossary: [],
+                sessionMemory: []
+            ),
+            profile: profile,
+            modelID: modelID
+        )
+
+        let cleanText = result.text ?? transcript.rawText
+        return FormattedOutput(
+            clean_text: cleanText,
+            format: "paragraph",
+            bullets: [],
+            self_corrections: [],
+            low_confidence_spans: [],
+            notes: result.status == .fallback ? ["Returned deterministic fallback output."] : []
+        )
+    }
+
+    func refine(
+        deterministicText: String,
+        contextPack: ContextPack,
+        profile: PromptProfile,
+        modelID: String
+    ) async throws -> LLMResult {
+        guard !deterministicText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw LocalLogicError.missingTranscript
+        }
+
+        let startedAt = Date()
         let expectedModel = ollamaModelName(for: modelID)
         let runtime = await checkRuntime(expectedModelID: modelID)
         guard runtime.isReachable else {
@@ -93,27 +152,149 @@ final class OllamaLocalLogicService {
             throw LocalLogicError.modelMissing(expectedModel)
         }
 
-        let firstPrompt = formattingPrompt(transcript: transcript, settings: settings)
-        let firstOutput = try await runGenerate(model: expectedModel, prompt: firstPrompt)
+        let promptPayload = payload(profile: profile, contextPack: contextPack, text: deterministicText)
+        switch profile.outputMode {
+        case .text:
+            let firstPrompt = "\(profile.instructionPrefix)\n\n\(promptPayload)"
+            let output = try await runGenerate(model: expectedModel, prompt: firstPrompt)
+            let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+            let latencyMs = Int(Date().timeIntervalSince(startedAt) * 1000)
 
-        if let parsed = decodeFormattedOutput(from: firstOutput) {
-            return parsed
+            if trimmed.isEmpty {
+                return LLMResult(
+                    text: deterministicText,
+                    json: nil,
+                    status: .fallback,
+                    validationStatus: .notApplicable,
+                    tokens: 0,
+                    cachedTokens: 0,
+                    latencyMs: latencyMs,
+                    profileID: profile.id,
+                    profileVersion: profile.version,
+                    modelID: modelID,
+                    fromCache: false
+                )
+            }
+
+            return LLMResult(
+                text: trimmed,
+                json: nil,
+                status: .success,
+                validationStatus: .notApplicable,
+                tokens: 0,
+                cachedTokens: 0,
+                latencyMs: latencyMs,
+                profileID: profile.id,
+                profileVersion: profile.version,
+                modelID: modelID,
+                fromCache: false
+            )
+
+        case .jsonSchema, .jsonObjectFallback:
+            let jsonPrompt = "\(profile.instructionPrefix)\n\n\(promptPayload)\nOutput JSON only."
+            let firstOutput = try await runGenerate(model: expectedModel, prompt: jsonPrompt)
+            let firstJSON = extractJSONObject(from: firstOutput)
+
+            if validateJSON(firstJSON, profile: profile) {
+                return LLMResult(
+                    text: nil,
+                    json: firstJSON,
+                    status: .success,
+                    validationStatus: .valid,
+                    tokens: 0,
+                    cachedTokens: 0,
+                    latencyMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+                    profileID: profile.id,
+                    profileVersion: profile.version,
+                    modelID: modelID,
+                    fromCache: false
+                )
+            }
+
+            let repairPrompt = """
+            Return valid JSON only.
+            Use the same schema requirements as before.
+            Invalid JSON:
+            \(firstOutput)
+            """
+            let repairedOutput = try await runGenerate(model: expectedModel, prompt: repairPrompt)
+            let repairedJSON = extractJSONObject(from: repairedOutput)
+
+            if validateJSON(repairedJSON, profile: profile) {
+                return LLMResult(
+                    text: nil,
+                    json: repairedJSON,
+                    status: .repaired,
+                    validationStatus: .valid,
+                    tokens: 0,
+                    cachedTokens: 0,
+                    latencyMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+                    profileID: profile.id,
+                    profileVersion: profile.version,
+                    modelID: modelID,
+                    fromCache: false
+                )
+            }
+
+            return LLMResult(
+                text: deterministicText,
+                json: nil,
+                status: .fallback,
+                validationStatus: .invalid,
+                tokens: 0,
+                cachedTokens: 0,
+                latencyMs: Int(Date().timeIntervalSince(startedAt) * 1000),
+                profileID: profile.id,
+                profileVersion: profile.version,
+                modelID: modelID,
+                fromCache: false
+            )
+        }
+    }
+
+    private func payload(profile: PromptProfile, contextPack: ContextPack, text: String) -> String {
+        var value: [String: Any] = [
+            "context": [
+                "active_app": contextPack.activeAppName,
+                "bundle_id": contextPack.bundleID,
+                "style_category": contextPack.styleCategory.rawValue,
+                "window_title": contextPack.windowTitle ?? "",
+                "focused_element_role": contextPack.focusedElementRole ?? "",
+            ],
+            "text": text,
+        ]
+
+        if !contextPack.glossary.isEmpty {
+            value["glossary"] = contextPack.glossary.map { ["from": $0.from, "to": $0.to] }
         }
 
-        let repair = repairPrompt(for: firstOutput)
-        let repairedOutput = try await runGenerate(model: expectedModel, prompt: repair)
-        if let repaired = decodeFormattedOutput(from: repairedOutput) {
-            return repaired
+        if let options = profile.options?.mapValues({ $0.toAnyValue() }), !options.isEmpty {
+            value["options"] = options
         }
 
-        return FormattedOutput(
-            clean_text: transcript.rawText,
-            format: "paragraph",
-            bullets: [],
-            self_corrections: [],
-            low_confidence_spans: [],
-            notes: ["Local model response was not valid schema JSON. Returned raw transcript."]
-        )
+        let data = (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return String(data: data, encoding: .utf8) ?? "{}"
+    }
+
+    private func validateJSON(_ jsonText: String, profile: PromptProfile) -> Bool {
+        guard let data = jsonText.data(using: .utf8) else {
+            return false
+        }
+
+        if profile.id == "action_items" {
+            return (try? JSONDecoder().decode(ActionItemsPayload.self, from: data)) != nil
+        }
+
+        return (try? JSONSerialization.jsonObject(with: data)) != nil
+    }
+
+    private func extractJSONObject(from text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let start = trimmed.firstIndex(of: "{"),
+           let end = trimmed.lastIndex(of: "}") {
+            return String(trimmed[start...end])
+        }
+        return trimmed
     }
 
     private func runGenerate(model: String, prompt: String) async throws -> String {
@@ -180,85 +361,6 @@ final class OllamaLocalLogicService {
                 let columns = line.split(whereSeparator: \.isWhitespace)
                 return columns.first.map(String.init)
             }
-    }
-
-    private func decodeFormattedOutput(from text: String) -> FormattedOutput? {
-        if let data = text.data(using: .utf8),
-           let output = try? JSONDecoder().decode(FormattedOutput.self, from: data) {
-            return output
-        }
-
-        if let start = text.firstIndex(of: "{"),
-           let end = text.lastIndex(of: "}") {
-            let json = String(text[start...end])
-            if let data = json.data(using: .utf8),
-               let output = try? JSONDecoder().decode(FormattedOutput.self, from: data) {
-                return output
-            }
-        }
-
-        return nil
-    }
-
-    private func formattingPrompt(transcript: Transcript, settings: LogicSettings) -> String {
-        let transcriptBody = transcript.segments.isEmpty
-            ? transcript.rawText
-            : transcript.segments.map { segment in
-                let speaker = segment.speaker?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let text = segment.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                return speaker.isEmpty ? text : "[\(speaker)] \(text)"
-            }.joined(separator: "\n")
-
-        let fillerRule = settings.removeFillerWords ? "remove filler words when not meaning-bearing" : "preserve filler words"
-        let listRule = settings.autoDetectLists ? "auto-detect list structure" : "do not force list structure"
-        let correctionRule: String
-        switch settings.selfCorrectionMode {
-        case .keepAll:
-            correctionRule = "preserve all self-corrections"
-        case .keepFinal:
-            correctionRule = "keep final corrected phrasing"
-        case .annotate:
-            correctionRule = "annotate self-corrections in self_corrections"
-        }
-
-        return """
-        Return JSON only, no markdown.
-        Schema:
-        {
-          "clean_text": "string",
-          "format": "paragraph|bullets|mixed",
-          "bullets": ["string"],
-          "self_corrections": ["string"],
-          "low_confidence_spans": ["string"],
-          "notes": ["string"]
-        }
-        Rules:
-        - Preserve meaning; do not invent facts.
-        - \(fillerRule).
-        - \(listRule).
-        - \(correctionRule).
-        - If unsure, keep source wording.
-
-        Transcript:
-        \(transcriptBody)
-        """
-    }
-
-    private func repairPrompt(for rawText: String) -> String {
-        """
-        Convert the following text into valid JSON only.
-        Required schema:
-        {
-          "clean_text": "string",
-          "format": "paragraph|bullets|mixed",
-          "bullets": ["string"],
-          "self_corrections": ["string"],
-          "low_confidence_spans": ["string"],
-          "notes": ["string"]
-        }
-        Text:
-        \(rawText)
-        """
     }
 
     private func ollamaModelName(for modelID: String) -> String {

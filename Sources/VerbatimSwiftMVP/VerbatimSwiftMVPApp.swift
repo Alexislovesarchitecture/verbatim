@@ -1,7 +1,5 @@
 import SwiftUI
 
-@available(macOS 26.0, *)
-@available(iOS 26.0, *)
 @main
 struct VerbatimSwiftMVPApp: App {
     @StateObject private var viewModel = TranscriptionViewModel()
@@ -10,11 +8,25 @@ struct VerbatimSwiftMVPApp: App {
         WindowGroup {
             ContentView()
                 .environmentObject(viewModel)
-                .containerBackground(.regularMaterial, for: .window)
-                .frame(minWidth: 760, minHeight: 680)
+                .preferredColorScheme(viewModel.appearanceMode.preferredColorScheme)
+                .applyWindowChrome()
+                .frame(minWidth: 1024, minHeight: 720)
         }
 #if os(macOS)
-        .defaultSize(width: 920, height: 760)
+        .defaultSize(width: 1260, height: 860)
+        .windowResizability(.contentMinSize)
+        .windowStyle(.hiddenTitleBar)
+#endif
+
+#if os(macOS)
+        Settings {
+            SettingsWindowView()
+                .environmentObject(viewModel)
+                .preferredColorScheme(viewModel.appearanceMode.preferredColorScheme)
+                .applyWindowChrome()
+                .frame(minWidth: 940, minHeight: 700)
+        }
+        .defaultSize(width: 980, height: 740)
         .windowResizability(.contentMinSize)
 #endif
     }

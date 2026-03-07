@@ -1,33 +1,158 @@
 import Foundation
 
-struct TranscriptSegment: Codable, Hashable {
-    let start: TimeInterval?
-    let end: TimeInterval?
-    let speaker: String?
-    let text: String
+struct TranscriptionSession: Identifiable, Codable, Hashable, Sendable {
+    enum Stage: String, Codable, Sendable {
+        case recording
+        case transcribing
+        case completed
+        case failed
+    }
+
+    var id: UUID
+    var engineID: String
+    var startedAt: Date
+    var endedAt: Date?
+    var stage: Stage
+    var errorMessage: String?
+
+    init(
+        id: UUID = UUID(),
+        engineID: String,
+        startedAt: Date = Date(),
+        endedAt: Date? = nil,
+        stage: Stage,
+        errorMessage: String? = nil
+    ) {
+        self.id = id
+        self.engineID = engineID
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.stage = stage
+        self.errorMessage = errorMessage
+    }
 }
 
-struct TokenLogprob: Codable, Hashable {
+struct TranscriptSegment: Codable, Hashable, Identifiable, Sendable {
+    var id: String
+    var start: TimeInterval?
+    var end: TimeInterval?
+    var speaker: String?
+    var text: String
+
+    init(
+        id: String = UUID().uuidString,
+        start: TimeInterval?,
+        end: TimeInterval?,
+        speaker: String?,
+        text: String
+    ) {
+        self.id = id
+        self.start = start
+        self.end = end
+        self.speaker = speaker
+        self.text = text
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case start
+        case end
+        case speaker
+        case text
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(String.self, forKey: .id) ?? UUID().uuidString
+        start = try container.decodeIfPresent(TimeInterval.self, forKey: .start)
+        end = try container.decodeIfPresent(TimeInterval.self, forKey: .end)
+        speaker = try container.decodeIfPresent(String.self, forKey: .speaker)
+        text = try container.decodeIfPresent(String.self, forKey: .text) ?? ""
+    }
+}
+
+struct TokenLogprob: Codable, Hashable, Sendable {
     let token: String
     let logprob: Double
     let start: TimeInterval?
     let end: TimeInterval?
 }
 
-struct LowConfidenceSpan: Codable, Hashable {
+struct LowConfidenceSpan: Codable, Hashable, Sendable {
     let start: TimeInterval?
     let end: TimeInterval?
     let text: String
     let averageLogprob: Double
 }
 
-struct Transcript: Codable {
+struct Transcript: Codable, Equatable, Sendable {
     let rawText: String
     let segments: [TranscriptSegment]
     let tokenLogprobs: [TokenLogprob]?
     let lowConfidenceSpans: [LowConfidenceSpan]
     let modelID: String
     let responseFormat: String
+
+    static func empty(modelID: String, responseFormat: String = "text") -> Transcript {
+        Transcript(
+            rawText: "",
+            segments: [],
+            tokenLogprobs: nil,
+            lowConfidenceSpans: [],
+            modelID: modelID,
+            responseFormat: responseFormat
+        )
+    }
+}
+
+struct TranscriptDelta: Codable, Hashable, Sendable {
+    let id: String
+    let text: String
+
+    init(id: String = UUID().uuidString, text: String) {
+        self.id = id
+        self.text = text
+    }
+}
+
+enum TranscriptEvent: Equatable, Sendable {
+    case delta(TranscriptDelta)
+    case segment(TranscriptSegment)
+    case done(Transcript)
+}
+
+struct AudioPCM16Frame: Equatable, Sendable {
+    let sequenceNumber: UInt64
+    let sampleRate: Double
+    let channelCount: Int
+    let samples: Data
+
+    var sampleCount: Int {
+        samples.count / MemoryLayout<Int16>.size
+    }
+}
+
+enum TranscriptionSource {
+    case audioFile(URL)
+    case recordingArtifact(audioURL: URL, frames: AsyncStream<AudioPCM16Frame>)
+
+    var audioURL: URL? {
+        switch self {
+        case .audioFile(let url):
+            return url
+        case .recordingArtifact(let audioURL, _):
+            return audioURL
+        }
+    }
+
+    var frames: AsyncStream<AudioPCM16Frame>? {
+        switch self {
+        case .audioFile:
+            return nil
+        case .recordingArtifact(_, let frames):
+            return frames
+        }
+    }
 }
 
 struct FormattedOutput: Codable {
@@ -69,8 +194,9 @@ struct LogicSettings: Codable {
     }
 }
 
-struct TranscriptionRequestOptions: Equatable {
+struct TranscriptionOptions: Equatable, Sendable {
     let modelID: String
+    var apiKey: String?
     var responseFormat: String
     var includeLogprobs: Bool
     var prompt: String?
@@ -84,6 +210,7 @@ struct TranscriptionRequestOptions: Equatable {
 
     init(
         modelID: String,
+        apiKey: String? = nil,
         responseFormat: String = "json",
         includeLogprobs: Bool = false,
         prompt: String? = nil,
@@ -96,6 +223,7 @@ struct TranscriptionRequestOptions: Equatable {
         knownSpeakerReferences: [String] = []
     ) {
         self.modelID = modelID
+        self.apiKey = apiKey
         self.responseFormat = responseFormat
         self.includeLogprobs = includeLogprobs
         self.prompt = prompt
@@ -109,6 +237,64 @@ struct TranscriptionRequestOptions: Equatable {
     }
 }
 
+typealias TranscriptionRequestOptions = TranscriptionOptions
+
+struct EngineCapabilities: Equatable, Sendable {
+    var supportsStreamingEvents: Bool
+    var supportsLiveAudioFrames: Bool
+    var supportsDiarization: Bool
+    var supportsLogprobs: Bool
+    var supportsTimestamps: Bool
+    var supportsPrompt: Bool
+
+    static let none = EngineCapabilities(
+        supportsStreamingEvents: false,
+        supportsLiveAudioFrames: false,
+        supportsDiarization: false,
+        supportsLogprobs: false,
+        supportsTimestamps: false,
+        supportsPrompt: false
+    )
+}
+
+enum TranscriptionEngineError: LocalizedError {
+    case missingAudioSource
+
+    var errorDescription: String? {
+        switch self {
+        case .missingAudioSource:
+            return "A transcription engine requires an audio file source."
+        }
+    }
+}
+
+protocol TranscriptionEngine: Sendable {
+    var engineID: String { get }
+    var capabilities: EngineCapabilities { get }
+
+    func transcribeBatch(audioURL: URL, options: TranscriptionOptions) async throws -> Transcript
+    func transcribeEvents(source: TranscriptionSource, options: TranscriptionOptions) -> AsyncThrowingStream<TranscriptEvent, Error>
+}
+
+extension TranscriptionEngine {
+    func transcribeEvents(source: TranscriptionSource, options: TranscriptionOptions) -> AsyncThrowingStream<TranscriptEvent, Error> {
+        AsyncThrowingStream { continuation in
+            Task {
+                do {
+                    guard let audioURL = source.audioURL else {
+                        throw TranscriptionEngineError.missingAudioSource
+                    }
+                    let transcript = try await transcribeBatch(audioURL: audioURL, options: options)
+                    continuation.yield(.done(transcript))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+        }
+    }
+}
+
 struct ModelCapabilityConstraintContext {
     let responseFormat: String
     let includeLogprobs: Bool
@@ -118,7 +304,7 @@ struct ModelCapabilityConstraintContext {
     let diarizationEnabled: Bool
     let chunkingStrategy: String?
 
-    init(from options: TranscriptionRequestOptions, model: ModelRegistryEntry, shouldUseChunkingForLongAudio: Bool) {
+    init(from options: TranscriptionOptions, model: ModelRegistryEntry, shouldUseChunkingForLongAudio: Bool) {
         if model.allowedResponseFormats.contains(options.responseFormat) {
             responseFormat = options.responseFormat
         } else {
