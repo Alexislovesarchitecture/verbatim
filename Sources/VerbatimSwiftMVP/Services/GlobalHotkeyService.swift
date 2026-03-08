@@ -19,6 +19,7 @@ protocol GlobalHotkeyServiceProtocol {
     func startMonitoring(config: GlobalHotkeyConfig, handler: @escaping (GlobalHotkeyEvent) -> Void)
     func stopMonitoring()
     func hasAccessibilityPermission() -> Bool
+    func requestAccessibilityPermissionPrompt() -> Bool
 }
 
 final class GlobalHotkeyService: GlobalHotkeyServiceProtocol {
@@ -71,6 +72,15 @@ final class GlobalHotkeyService: GlobalHotkeyServiceProtocol {
     func hasAccessibilityPermission() -> Bool {
 #if canImport(AppKit)
         AXIsProcessTrusted()
+#else
+        true
+#endif
+    }
+
+    func requestAccessibilityPermissionPrompt() -> Bool {
+#if canImport(AppKit)
+        let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
 #else
         true
 #endif

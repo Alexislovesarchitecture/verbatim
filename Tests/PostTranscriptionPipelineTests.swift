@@ -22,6 +22,7 @@ final class PostTranscriptionPipelineTests: XCTestCase {
             )
         )
         let pipeline = PostTranscriptionPipeline(
+            transcriptIntentResolver: TranscriptIntentResolver(),
             deterministicFormatter: FakeDeterministicFormatter(),
             contextPackBuilder: ContextPackBuilder(),
             activeAppContextService: FakeActiveAppContextService(styleCategory: .work),
@@ -40,6 +41,8 @@ final class PostTranscriptionPipelineTests: XCTestCase {
                     modelID: "gpt-4o-mini-transcribe",
                     responseFormat: "json"
                 ),
+                activeAppContextOverride: nil,
+                insertionTarget: nil,
                 promptProfiles: [makeProfile(id: "cleanup")],
                 logicMode: .remote,
                 logicSettings: LogicSettings(),
@@ -58,6 +61,7 @@ final class PostTranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(result.latestLLMResult?.modelID, "gpt-5-mini")
         XCTAssertEqual(insertionService.insertedTexts, ["Hello there!"])
         XCTAssertEqual(recordStore.records.count, 1)
+        XCTAssertEqual(llmService.lastProfileID, "auto_style_work_formal")
     }
 
     func testRunManualReformatReturnsActionItemsPreview() async {
@@ -79,6 +83,7 @@ final class PostTranscriptionPipelineTests: XCTestCase {
             )
         )
         let pipeline = PostTranscriptionPipeline(
+            transcriptIntentResolver: TranscriptIntentResolver(),
             deterministicFormatter: FakeDeterministicFormatter(),
             contextPackBuilder: ContextPackBuilder(),
             activeAppContextService: FakeActiveAppContextService(styleCategory: .work),
@@ -97,6 +102,7 @@ final class PostTranscriptionPipelineTests: XCTestCase {
                     modelID: "gpt-4o-mini-transcribe",
                     responseFormat: "json"
                 ),
+                activeAppContextOverride: nil,
                 profile: makeProfile(id: "action_items", outputMode: .jsonSchema),
                 logicMode: .remote,
                 logicSettings: LogicSettings(),
@@ -113,6 +119,102 @@ final class PostTranscriptionPipelineTests: XCTestCase {
         XCTAssertEqual(result.pendingActionItemsRenderedText, "1. Follow up (owner: Alexis, due: 2026-03-06)")
         XCTAssertTrue(insertionService.insertedTexts.isEmpty)
         XCTAssertEqual(recordStore.records.count, 1)
+    }
+
+    func testProcessCompletedTranscriptResolvesIntentBeforeDeterministicFormatting() async {
+        let recordStore = FakeRecordStore()
+        let insertionService = FakeInsertionService()
+        let deterministicFormatter = CapturingDeterministicFormatter()
+        let pipeline = PostTranscriptionPipeline(
+            transcriptIntentResolver: TranscriptIntentResolver(),
+            deterministicFormatter: deterministicFormatter,
+            contextPackBuilder: ContextPackBuilder(),
+            activeAppContextService: FakeActiveAppContextService(styleCategory: .work),
+            transcriptRecordStore: recordStore,
+            insertionService: insertionService,
+            llmFormatterService: FakeLLMFormatterService(result: nil)
+        )
+
+        let result = await pipeline.processCompletedTranscript(
+            PostTranscriptionPipelineRequest(
+                transcript: Transcript(
+                    rawText: "send that to John, I mean Jane",
+                    segments: [],
+                    tokenLogprobs: nil,
+                    lowConfidenceSpans: [],
+                    modelID: "gpt-4o-mini-transcribe",
+                    responseFormat: "json"
+                ),
+                activeAppContextOverride: nil,
+                insertionTarget: nil,
+                promptProfiles: [makeProfile(id: "cleanup")],
+                logicMode: .remote,
+                logicSettings: LogicSettings(),
+                refineSettings: RefineSettings(workEnabled: false, emailEnabled: false, personalEnabled: false, otherEnabled: false, previewBeforeInsert: true),
+                interactionSettings: InteractionSettings(),
+                autoFormatEnabled: false,
+                canRunAutoFormat: false,
+                effectiveAPIKey: nil,
+                selectedRemoteLogicModelID: "gpt-5-mini",
+                selectedLocalLogicModelID: "gpt-oss-20b",
+                forceInsertion: false
+            )
+        )
+
+        XCTAssertEqual(deterministicFormatter.lastInputText, "send that to Jane")
+        XCTAssertEqual(result.deterministicResult.text, "Send That To Jane.")
+        XCTAssertTrue(result.formattedOutput?.self_corrections.contains { $0.contains("I mean") || $0.contains("i mean") } ?? false)
+    }
+
+    func testProcessCompletedTranscriptUsesCapturedInsertionTarget() async {
+        let recordStore = FakeRecordStore()
+        let insertionService = FakeInsertionService()
+        let capturedContext = ActiveAppContext(
+            appName: "Messages",
+            bundleID: "com.apple.MobileSMS",
+            processIdentifier: 999,
+            styleCategory: .personal,
+            windowTitle: "Chat",
+            focusedElementRole: "AXTextArea"
+        )
+        let pipeline = PostTranscriptionPipeline(
+            transcriptIntentResolver: TranscriptIntentResolver(),
+            deterministicFormatter: FakeDeterministicFormatter(),
+            contextPackBuilder: ContextPackBuilder(),
+            activeAppContextService: FakeActiveAppContextService(styleCategory: .work),
+            transcriptRecordStore: recordStore,
+            insertionService: insertionService,
+            llmFormatterService: FakeLLMFormatterService(result: nil)
+        )
+
+        _ = await pipeline.processCompletedTranscript(
+            PostTranscriptionPipelineRequest(
+                transcript: Transcript(
+                    rawText: "hello there",
+                    segments: [],
+                    tokenLogprobs: nil,
+                    lowConfidenceSpans: [],
+                    modelID: "gpt-4o-mini-transcribe",
+                    responseFormat: "json"
+                ),
+                activeAppContextOverride: capturedContext,
+                insertionTarget: capturedContext.insertionTarget,
+                promptProfiles: [makeProfile(id: "cleanup")],
+                logicMode: .remote,
+                logicSettings: LogicSettings(),
+                refineSettings: RefineSettings(workEnabled: false, emailEnabled: false, personalEnabled: true, otherEnabled: false, previewBeforeInsert: false),
+                interactionSettings: InteractionSettings(),
+                autoFormatEnabled: false,
+                canRunAutoFormat: false,
+                effectiveAPIKey: nil,
+                selectedRemoteLogicModelID: "gpt-5-mini",
+                selectedLocalLogicModelID: "gpt-oss-20b",
+                forceInsertion: true
+            )
+        )
+
+        XCTAssertEqual(insertionService.lastTarget?.bundleID, "com.apple.MobileSMS")
+        XCTAssertEqual(insertionService.lastTarget?.processIdentifier, 999)
     }
 
     private func makeProfile(id: String, outputMode: PromptOutputMode = .text) -> PromptProfile {
@@ -141,10 +243,25 @@ private struct FakeDeterministicFormatter: DeterministicFormatterServiceProtocol
     }
 }
 
-private final class FakeLLMFormatterService: LLMFormatterServiceProtocol {
-    let result: LLMResult
+private final class CapturingDeterministicFormatter: DeterministicFormatterServiceProtocol {
+    private(set) var lastInputText: String?
 
-    init(result: LLMResult) {
+    func format(text: String, settings: LogicSettings, glossary: [GlossaryEntry]) -> DeterministicResult {
+        lastInputText = text
+        return DeterministicResult(
+            text: text.capitalized + ".",
+            punctuationAdjusted: true,
+            removedFillers: [],
+            appliedGlossary: []
+        )
+    }
+}
+
+private final class FakeLLMFormatterService: LLMFormatterServiceProtocol {
+    let result: LLMResult?
+    private(set) var lastProfileID: String?
+
+    init(result: LLMResult?) {
         self.result = result
     }
 
@@ -156,7 +273,11 @@ private final class FakeLLMFormatterService: LLMFormatterServiceProtocol {
         modelID: String,
         apiKey: String?
     ) async throws -> LLMResult {
-        result
+        lastProfileID = profile.id
+        guard let result else {
+            throw CancellationError()
+        }
+        return result
     }
 }
 
@@ -166,6 +287,7 @@ private final class FakeRecordStore: TranscriptRecordStoreProtocol {
     func fetchCachedResult(for key: LLMCacheKey) -> LLMResult? { nil }
     func saveCachedResult(_ result: LLMResult, for key: LLMCacheKey) {}
     func appendRecord(_ record: TranscriptRecord) { records.append(record) }
+    func fetchRecentRecords(limit: Int) -> [TranscriptRecord] { Array(records.prefix(limit)) }
     func makeCacheKey(profile: PromptProfile, modelID: String, contextPack: ContextPack, deterministicText: String) -> LLMCacheKey {
         LLMCacheKey(
             profileID: profile.id,
@@ -179,9 +301,11 @@ private final class FakeRecordStore: TranscriptRecordStoreProtocol {
 
 private final class FakeInsertionService: InsertionServiceProtocol {
     private(set) var insertedTexts: [String] = []
+    private(set) var lastTarget: InsertionTarget?
 
-    func insert(text: String, autoPaste: Bool) throws {
+    func insert(text: String, autoPaste: Bool, target: InsertionTarget?) throws {
         insertedTexts.append(text)
+        lastTarget = target
     }
 }
 
@@ -192,6 +316,7 @@ private struct FakeActiveAppContextService: ActiveAppContextServiceProtocol {
         ActiveAppContext(
             appName: "Mail",
             bundleID: "com.apple.mail",
+            processIdentifier: 123,
             styleCategory: styleCategory,
             windowTitle: "Inbox",
             focusedElementRole: "AXTextArea"

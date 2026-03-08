@@ -21,7 +21,7 @@ enum InsertionError: LocalizedError {
 }
 
 final class ClipboardInsertionService: InsertionServiceProtocol {
-    func insert(text: String, autoPaste: Bool) throws {
+    func insert(text: String, autoPaste: Bool, target: InsertionTarget? = nil) throws {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw InsertionError.emptyText
@@ -31,7 +31,7 @@ final class ClipboardInsertionService: InsertionServiceProtocol {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(trimmed, forType: .string)
         if autoPaste {
-            try pasteToFrontmostApplication()
+            try pasteToApplication(target)
         }
 #elseif canImport(UIKit)
         UIPasteboard.general.string = trimmed
@@ -39,9 +39,13 @@ final class ClipboardInsertionService: InsertionServiceProtocol {
     }
 
 #if canImport(AppKit)
-    private func pasteToFrontmostApplication() throws {
+    private func pasteToApplication(_ target: InsertionTarget?) throws {
         guard AXIsProcessTrusted() else {
             throw InsertionError.accessibilityPermissionRequired
+        }
+
+        if let target {
+            restoreTargetApplication(target)
         }
 
         let source = CGEventSource(stateID: .hidSystemState)
@@ -55,6 +59,21 @@ final class ClipboardInsertionService: InsertionServiceProtocol {
 
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
+    }
+
+    private func restoreTargetApplication(_ target: InsertionTarget) {
+        let runningApp: NSRunningApplication?
+        if let pid = target.processIdentifier, pid > 0 {
+            runningApp = NSRunningApplication(processIdentifier: pid)
+        } else {
+            runningApp = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == target.bundleID }
+        }
+
+        guard let runningApp else { return }
+        if !runningApp.isActive {
+            runningApp.activate()
+            Thread.sleep(forTimeInterval: 0.12)
+        }
     }
 #endif
 }

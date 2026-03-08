@@ -22,6 +22,8 @@ final class TranscriptRecordStoreTests: XCTestCase {
             activeAppName: "Mail",
             bundleID: "com.apple.mail",
             styleCategory: .email,
+            stylePreset: .formal,
+            styleSummary: "Caps: full. Punctuation: full. Format: email. Structure: greeting, body, sign-off.",
             windowTitle: "Inbox",
             focusedElementRole: "AXTextArea",
             punctuationMode: "sentence",
@@ -58,5 +60,59 @@ final class TranscriptRecordStoreTests: XCTestCase {
         XCTAssertEqual(cached?.tokens, 11)
         XCTAssertEqual(cached?.cachedTokens, 9)
         XCTAssertEqual(cached?.fromCache, true)
+    }
+
+    func testRecentRecordsReturnNewestFirst() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-\(UUID().uuidString)", isDirectory: true)
+        let sut = TranscriptRecordStore(baseDirectoryURL: tempRoot)
+
+        sut.appendRecord(
+            TranscriptRecord(
+                createdAt: Date(timeIntervalSince1970: 100),
+                rawText: "first raw",
+                deterministicText: "first clean",
+                llmText: nil,
+                llmJSON: nil,
+                llmStatus: nil,
+                validationStatus: nil,
+                profileID: nil,
+                profileVersion: nil,
+                modelID: nil,
+                tokens: nil,
+                cachedTokens: nil,
+                latencyMs: nil,
+                activeAppName: "Mail",
+                bundleID: "com.apple.mail",
+                styleCategory: .email
+            )
+        )
+
+        sut.appendRecord(
+            TranscriptRecord(
+                createdAt: Date(timeIntervalSince1970: 200),
+                rawText: "second raw",
+                deterministicText: "second clean",
+                llmText: "second formatted",
+                llmJSON: nil,
+                llmStatus: .success,
+                validationStatus: .notApplicable,
+                profileID: "auto-style",
+                profileVersion: 1,
+                modelID: "gpt-5-mini",
+                tokens: 8,
+                cachedTokens: 0,
+                latencyMs: 32,
+                activeAppName: "Messages",
+                bundleID: "com.apple.MobileSMS",
+                styleCategory: .personal
+            )
+        )
+
+        let records = sut.fetchRecentRecords(limit: 10)
+
+        XCTAssertEqual(records.count, 2)
+        XCTAssertEqual(records.first?.rawText, "second raw")
+        XCTAssertEqual(records.first?.llmText, "second formatted")
+        XCTAssertEqual(records.last?.rawText, "first raw")
     }
 }

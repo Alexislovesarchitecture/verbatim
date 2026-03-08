@@ -5,7 +5,6 @@ final class DeterministicFormatterService: DeterministicFormatterServiceProtocol
         #"\bum+\b"#,
         #"\buh+\b"#,
         #"\byou know\b"#,
-        #"\bi mean\b"#,
     ]
 
     func format(text: String, settings: LogicSettings, glossary: [GlossaryEntry]) -> DeterministicResult {

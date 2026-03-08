@@ -67,6 +67,7 @@ final class TranscriptionViewModel: ObservableObject {
     @Published private(set) var deterministicResult: DeterministicResult? = nil
     @Published private(set) var latestLLMResult: LLMResult? = nil
     @Published private(set) var promptProfiles: [PromptProfile] = []
+    @Published private(set) var transcriptHistory: [TranscriptRecord] = []
     @Published var selectedTranscriptViewMode: TranscriptViewMode = .raw
     @Published var apiKey: String = ""
     @Published var refineSettings: RefineSettings = RefineSettings() {
@@ -216,7 +217,9 @@ final class TranscriptionViewModel: ObservableObject {
     private let transcriptionCoordinator: TranscriptionCoordinator
     private let localLogicService: OllamaLocalLogicService
     private let promptProfileStore: PromptProfileStore
+    private let transcriptRecordStore: TranscriptRecordStoreProtocol
     private let postTranscriptionPipeline: PostTranscriptionPipeline
+    private let activeAppContextService: ActiveAppContextServiceProtocol
     private let insertionService: InsertionServiceProtocol
     private let globalHotkeyService: GlobalHotkeyServiceProtocol
     private let listeningIndicatorService: ListeningIndicatorServiceProtocol
@@ -225,7 +228,10 @@ final class TranscriptionViewModel: ObservableObject {
     private var localLogicRuntimeTask: Task<Void, Never>?
     private var hotkeyIsPressed = false
     private var pendingDoubleTapDate: Date?
+    private var hasRequestedAccessibilityPrompt = false
     private var shouldForceInsertionForCurrentRecording = false
+    private var recordingAppContextOverride: ActiveAppContext?
+    private var insertionTargetForCurrentRecording: InsertionTarget?
 #if canImport(AppKit)
     private var hotkeyCaptureLocalMonitor: Any?
 #endif
@@ -264,6 +270,7 @@ final class TranscriptionViewModel: ObservableObject {
         localLogicService: OllamaLocalLogicService = OllamaLocalLogicService(),
         modelCatalogService: ModelCatalogServiceProtocol? = nil,
         transcriptionCoordinator: TranscriptionCoordinator? = nil,
+        transcriptIntentResolver: TranscriptIntentResolverProtocol = TranscriptIntentResolver(),
         deterministicFormatter: DeterministicFormatterServiceProtocol = DeterministicFormatterService(),
         contextPackBuilder: ContextPackBuilder = ContextPackBuilder(),
         activeAppContextService: ActiveAppContextServiceProtocol = ActiveAppContextService(),
@@ -281,7 +288,7 @@ final class TranscriptionViewModel: ObservableObject {
             recordStore: transcriptRecordStore
         )
         let resolvedModelCatalogService = modelCatalogService ?? OpenAIModelCatalogService()
-        let resolvedListeningIndicatorService = listeningIndicatorService ?? MenuBarListeningIndicatorService()
+        let resolvedListeningIndicatorService = listeningIndicatorService ?? FloatingListeningIndicatorService()
 
         self.transcriptionCoordinator = transcriptionCoordinator
             ?? TranscriptionCoordinator(
@@ -291,8 +298,11 @@ final class TranscriptionViewModel: ObservableObject {
             )
         self.localLogicService = localLogicService
         self.promptProfileStore = promptProfileStore
+        self.transcriptRecordStore = transcriptRecordStore
+        self.activeAppContextService = activeAppContextService
         self.postTranscriptionPipeline = postTranscriptionPipeline
             ?? PostTranscriptionPipeline(
+                transcriptIntentResolver: transcriptIntentResolver,
                 deterministicFormatter: deterministicFormatter,
                 contextPackBuilder: contextPackBuilder,
                 activeAppContextService: activeAppContextService,
@@ -307,6 +317,7 @@ final class TranscriptionViewModel: ObservableObject {
 
         apiKey = UserDefaults.standard.string(forKey: Self.savedApiKeyDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         applySavedState()
+        reloadTranscriptHistory()
         rebuildModelRows()
         applyTranscriptionModelSelectionDefaults()
         applyLogicModeDefaults()
@@ -630,6 +641,14 @@ final class TranscriptionViewModel: ObservableObject {
         }
 
         shouldForceInsertionForCurrentRecording = fromHotkey
+        if fromHotkey {
+            let activeContext = activeAppContextService.currentContext()
+            recordingAppContextOverride = activeContext
+            insertionTargetForCurrentRecording = activeContext.insertionTarget
+        } else {
+            recordingAppContextOverride = nil
+            insertionTargetForCurrentRecording = nil
+        }
 
         Task {
             do {
@@ -661,8 +680,16 @@ final class TranscriptionViewModel: ObservableObject {
         hotkeyIsPressed = false
         pendingDoubleTapDate = nil
         let shouldInsertOnStop = shouldForceInsertionForCurrentRecording
+        let activeAppContextOverride = recordingAppContextOverride
+        let insertionTarget = insertionTargetForCurrentRecording
         shouldForceInsertionForCurrentRecording = false
-        listeningIndicatorService.hideListening()
+        recordingAppContextOverride = nil
+        insertionTargetForCurrentRecording = nil
+        if interactionSettings.showListeningIndicator {
+            listeningIndicatorService.showProcessing()
+        } else {
+            listeningIndicatorService.hideListening()
+        }
         if interactionSettings.playSoundCues {
             soundCueService.playStopCue()
         }
@@ -693,6 +720,7 @@ final class TranscriptionViewModel: ObservableObject {
                 }
 
                 guard let result = finalTranscript ?? transcript else {
+                    listeningIndicatorService.hideListening()
                     state = .error("No transcription text was produced.")
                     return
                 }
@@ -705,6 +733,8 @@ final class TranscriptionViewModel: ObservableObject {
                 let pipelineResult = await postTranscriptionPipeline.processCompletedTranscript(
                     PostTranscriptionPipelineRequest(
                         transcript: result,
+                        activeAppContextOverride: activeAppContextOverride,
+                        insertionTarget: insertionTarget,
                         promptProfiles: promptProfiles,
                         logicMode: logicMode,
                         logicSettings: logicSettings,
@@ -726,9 +756,16 @@ final class TranscriptionViewModel: ObservableObject {
                 pendingActionItemsRenderedText = pipelineResult.pendingActionItemsRenderedText
                 lastErrorSummary = pipelineResult.lastErrorSummary
                 selectedTranscriptViewMode = .formatted
+                reloadTranscriptHistory()
+                if interactionSettings.showListeningIndicator {
+                    listeningIndicatorService.showCompletedBriefly()
+                } else {
+                    listeningIndicatorService.hideListening()
+                }
 
                 state = .done
             } catch {
+                listeningIndicatorService.hideListening()
                 if let err = error as? AudioRecorderError {
                     state = .error(err.localizedDescription)
                 } else if let err = error as? OpenAITranscriptionError {
@@ -766,7 +803,59 @@ final class TranscriptionViewModel: ObservableObject {
             ? (formattedOutput?.clean_text ?? deterministicResult?.text ?? transcriptText)
             : transcriptText
         guard !text.isEmpty else { return }
-        try? insertionService.insert(text: text, autoPaste: false)
+        try? insertionService.insert(text: text, autoPaste: false, target: nil)
+    }
+
+    func copyTranscriptRecord(_ record: TranscriptRecord) {
+        let text = preferredTranscriptText(for: record)
+        guard !text.isEmpty else { return }
+        try? insertionService.insert(text: text, autoPaste: false, target: nil)
+    }
+
+    func copyRawTranscriptRecord(_ record: TranscriptRecord) {
+        let text = record.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        try? insertionService.insert(text: text, autoPaste: false, target: nil)
+    }
+
+    func copyTranscriptFeedbackPacket(_ record: TranscriptRecord) {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+
+        let payload = [
+            "Transcript feedback",
+            "Created: \(formatter.string(from: record.createdAt))",
+            "App: \(record.activeAppName)",
+            "Category: \(record.styleCategory.title)",
+            "",
+            "Formatted / final text:",
+            preferredTranscriptText(for: record),
+            "",
+            "Raw transcript:",
+            record.rawText
+        ]
+        .joined(separator: "\n")
+
+        try? insertionService.insert(text: payload, autoPaste: false, target: nil)
+    }
+
+    func reloadTranscriptHistory(limit: Int = 200) {
+        transcriptHistory = transcriptRecordStore.fetchRecentRecords(limit: limit)
+    }
+
+    func preferredTranscriptText(for record: TranscriptRecord) -> String {
+        let formatted = record.llmText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !formatted.isEmpty {
+            return formatted
+        }
+
+        let deterministic = record.deterministicText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !deterministic.isEmpty {
+            return deterministic
+        }
+
+        return record.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     func clearTranscript() {
@@ -810,6 +899,7 @@ final class TranscriptionViewModel: ObservableObject {
             let pipelineResult = await postTranscriptionPipeline.runManualReformat(
                 ManualReformatRequest(
                     transcript: transcript,
+                    activeAppContextOverride: nil,
                     profile: profile,
                     logicMode: logicMode,
                     logicSettings: logicSettings,
@@ -833,7 +923,7 @@ final class TranscriptionViewModel: ObservableObject {
 
     func confirmActionItemsPreviewInsertion() {
         guard let rendered = pendingActionItemsRenderedText, !rendered.isEmpty else { return }
-        try? insertionService.insert(text: rendered, autoPaste: interactionSettings.autoPasteAfterInsert)
+        try? insertionService.insert(text: rendered, autoPaste: interactionSettings.autoPasteAfterInsert, target: nil)
         formattedOutput = makeFormattedOutput(from: rendered)
         selectedTranscriptViewMode = .formatted
         pendingActionItemsJSON = nil
@@ -872,6 +962,20 @@ final class TranscriptionViewModel: ObservableObject {
 
     func resetHotkeyToDefault() {
         interactionSettings.hotkeyBinding = .defaultFunctionKey
+        if interactionSettings.hotkeyEnabled && !hotkeyPermissionGranted {
+            requestAccessibilityPermissionPrompt()
+        }
+    }
+
+    func requestAccessibilityPermissionPrompt() {
+        hotkeyPermissionGranted = globalHotkeyService.requestAccessibilityPermissionPrompt()
+        hasRequestedAccessibilityPrompt = true
+
+        if hotkeyPermissionGranted {
+            configureHotkeyMonitoring()
+        } else {
+            hotkeyStatusMessage = "Accessibility access is required for Fn / Globe hotkeys. macOS should open the permission prompt."
+        }
     }
 
     private func configureHotkeyMonitoring() {
@@ -893,8 +997,13 @@ final class TranscriptionViewModel: ObservableObject {
             return
         }
 
+        if !hotkeyPermissionGranted && !hasRequestedAccessibilityPrompt {
+            hotkeyPermissionGranted = globalHotkeyService.requestAccessibilityPermissionPrompt()
+            hasRequestedAccessibilityPrompt = true
+        }
+
         guard hotkeyPermissionGranted else {
-            hotkeyStatusMessage = "Enable Accessibility access to use global hotkeys."
+            hotkeyStatusMessage = "Enable Accessibility access to use Fn / Globe hotkeys."
             return
         }
 
@@ -910,7 +1019,7 @@ final class TranscriptionViewModel: ObservableObject {
             }
         }
 
-        hotkeyStatusMessage = "Hotkey active: \(interactionSettings.hotkeyBinding.displayTitle) • \(interactionSettings.hotkeyTriggerMode.title)"
+        hotkeyStatusMessage = "Hotkey active: \(interactionSettings.hotkeyBinding.displayTitle) • \(hotkeyBehaviorSummary)"
     }
 
     private func handleHotkeyEvent(_ event: GlobalHotkeyEvent) {
@@ -976,6 +1085,17 @@ final class TranscriptionViewModel: ObservableObject {
                 pendingDoubleTapDate = now
                 lastErrorSummary = "Double-tap the hotkey to lock recording."
             }
+        }
+    }
+
+    private var hotkeyBehaviorSummary: String {
+        switch interactionSettings.hotkeyTriggerMode {
+        case .holdToTalk:
+            return "Hold to record, release to send."
+        case .tapToToggle:
+            return "Single tap to start or stop."
+        case .doubleTapLock:
+            return "Double tap to lock recording, single tap to stop."
         }
     }
 

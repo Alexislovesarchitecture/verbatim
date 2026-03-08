@@ -2,6 +2,8 @@ import Foundation
 
 struct PostTranscriptionPipelineRequest {
     let transcript: Transcript
+    let activeAppContextOverride: ActiveAppContext?
+    let insertionTarget: InsertionTarget?
     let promptProfiles: [PromptProfile]
     let logicMode: LogicMode
     let logicSettings: LogicSettings
@@ -17,6 +19,7 @@ struct PostTranscriptionPipelineRequest {
 
 struct ManualReformatRequest {
     let transcript: Transcript
+    let activeAppContextOverride: ActiveAppContext?
     let profile: PromptProfile
     let logicMode: LogicMode
     let logicSettings: LogicSettings
@@ -38,6 +41,7 @@ struct PostTranscriptionPipelineResult {
 
 @MainActor
 final class PostTranscriptionPipeline {
+    private let transcriptIntentResolver: TranscriptIntentResolverProtocol
     private let deterministicFormatter: DeterministicFormatterServiceProtocol
     private let contextPackBuilder: ContextPackBuilder
     private let activeAppContextService: ActiveAppContextServiceProtocol
@@ -46,6 +50,7 @@ final class PostTranscriptionPipeline {
     private let llmFormatterService: LLMFormatterServiceProtocol
 
     init(
+        transcriptIntentResolver: TranscriptIntentResolverProtocol,
         deterministicFormatter: DeterministicFormatterServiceProtocol,
         contextPackBuilder: ContextPackBuilder,
         activeAppContextService: ActiveAppContextServiceProtocol,
@@ -53,6 +58,7 @@ final class PostTranscriptionPipeline {
         insertionService: InsertionServiceProtocol,
         llmFormatterService: LLMFormatterServiceProtocol
     ) {
+        self.transcriptIntentResolver = transcriptIntentResolver
         self.deterministicFormatter = deterministicFormatter
         self.contextPackBuilder = contextPackBuilder
         self.activeAppContextService = activeAppContextService
@@ -62,13 +68,19 @@ final class PostTranscriptionPipeline {
     }
 
     func processCompletedTranscript(_ request: PostTranscriptionPipelineRequest) async -> PostTranscriptionPipelineResult {
+        let activeAppContext = request.activeAppContextOverride ?? activeAppContextService.currentContext()
+        let resolvedTranscript = transcriptIntentResolver.resolve(
+            transcript: request.transcript,
+            selfCorrectionMode: request.logicSettings.selfCorrectionMode,
+            glossary: request.refineSettings.glossary,
+            activeContext: activeAppContext
+        )
         let deterministic = deterministicFormatter.format(
-            text: request.transcript.rawText,
+            text: resolvedTranscript.text,
             settings: request.logicSettings,
             glossary: request.refineSettings.glossary
         )
 
-        let activeAppContext = activeAppContextService.currentContext()
         let contextPack = contextPackBuilder.build(
             activeContext: activeAppContext,
             logicSettings: request.logicSettings,
@@ -81,6 +93,7 @@ final class PostTranscriptionPipeline {
         var finalText = deterministic.text
         let selectedProfile = automaticProfile(
             for: activeAppContext.styleCategory,
+            settings: request.refineSettings,
             from: request.promptProfiles
         )
 
@@ -108,7 +121,8 @@ final class PostTranscriptionPipeline {
             do {
                 try insertionService.insert(
                     text: finalText,
-                    autoPaste: request.interactionSettings.autoPasteAfterInsert
+                    autoPaste: request.interactionSettings.autoPasteAfterInsert,
+                    target: request.insertionTarget
                 )
             } catch {
                 lastErrorSummary = error.localizedDescription
@@ -138,7 +152,11 @@ final class PostTranscriptionPipeline {
 
         return PostTranscriptionPipelineResult(
             deterministicResult: deterministic,
-            formattedOutput: makeFormattedOutput(from: finalText),
+            formattedOutput: makeFormattedOutput(
+                from: finalText,
+                corrections: resolvedTranscript.corrections,
+                notes: resolvedTranscript.notes
+            ),
             latestLLMResult: llmResult,
             pendingActionItemsJSON: nil,
             pendingActionItemsRenderedText: nil,
@@ -147,13 +165,19 @@ final class PostTranscriptionPipeline {
     }
 
     func runManualReformat(_ request: ManualReformatRequest) async -> PostTranscriptionPipelineResult {
+        let activeAppContext = request.activeAppContextOverride ?? activeAppContextService.currentContext()
+        let resolvedTranscript = transcriptIntentResolver.resolve(
+            transcript: request.transcript,
+            selfCorrectionMode: request.logicSettings.selfCorrectionMode,
+            glossary: request.refineSettings.glossary,
+            activeContext: activeAppContext
+        )
         let deterministic = deterministicFormatter.format(
-            text: request.transcript.rawText,
+            text: resolvedTranscript.text,
             settings: request.logicSettings,
             glossary: request.refineSettings.glossary
         )
 
-        let activeAppContext = activeAppContextService.currentContext()
         let contextPack = contextPackBuilder.build(
             activeContext: activeAppContext,
             logicSettings: request.logicSettings,
@@ -207,13 +231,18 @@ final class PostTranscriptionPipeline {
             if !request.refineSettings.previewBeforeInsert {
                 try? insertionService.insert(
                     text: text,
-                    autoPaste: request.interactionSettings.autoPasteAfterInsert
+                    autoPaste: request.interactionSettings.autoPasteAfterInsert,
+                    target: nil
                 )
             }
 
             return PostTranscriptionPipelineResult(
                 deterministicResult: deterministic,
-                formattedOutput: makeFormattedOutput(from: text),
+                formattedOutput: makeFormattedOutput(
+                    from: text,
+                    corrections: resolvedTranscript.corrections,
+                    notes: resolvedTranscript.notes
+                ),
                 latestLLMResult: result,
                 pendingActionItemsJSON: nil,
                 pendingActionItemsRenderedText: nil,
@@ -222,7 +251,11 @@ final class PostTranscriptionPipeline {
         } catch {
             return PostTranscriptionPipelineResult(
                 deterministicResult: deterministic,
-                formattedOutput: makeFormattedOutput(from: deterministic.text),
+                formattedOutput: makeFormattedOutput(
+                    from: deterministic.text,
+                    corrections: resolvedTranscript.corrections,
+                    notes: resolvedTranscript.notes
+                ),
                 latestLLMResult: nil,
                 pendingActionItemsJSON: nil,
                 pendingActionItemsRenderedText: nil,
@@ -231,21 +264,17 @@ final class PostTranscriptionPipeline {
         }
     }
 
-    private func automaticProfile(for styleCategory: StyleCategory, from profiles: [PromptProfile]) -> PromptProfile? {
-        let preferredID: String
-        switch styleCategory {
-        case .email:
-            preferredID = "app_tone_rewrite"
-        case .work, .personal, .other:
-            preferredID = "cleanup"
+    private func automaticProfile(
+        for styleCategory: StyleCategory,
+        settings: RefineSettings,
+        from profiles: [PromptProfile]
+    ) -> PromptProfile? {
+        let autoProfile = PromptProfile.automaticStyleProfile(for: styleCategory, settings: settings)
+        if autoProfile.instructionPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return profiles.first(where: { $0.id == "cleanup" && $0.enabled })
+                ?? profiles.first(where: { $0.enabled })
         }
-
-        if let preferred = profiles.first(where: { $0.id == preferredID && $0.enabled }) {
-            return preferred
-        }
-
-        return profiles.first(where: { $0.id == "cleanup" && $0.enabled })
-            ?? profiles.first(where: { $0.enabled })
+        return autoProfile
     }
 
     private func renderedText(from result: LLMResult, fallback: String) -> String {
@@ -280,7 +309,11 @@ final class PostTranscriptionPipeline {
         }.joined(separator: "\n")
     }
 
-    private func makeFormattedOutput(from text: String) -> FormattedOutput {
+    private func makeFormattedOutput(
+        from text: String,
+        corrections: [ResolvedSelfCorrection],
+        notes: [String]
+    ) -> FormattedOutput {
         let lines = text
             .split(whereSeparator: \.isNewline)
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -304,9 +337,9 @@ final class PostTranscriptionPipeline {
             clean_text: text,
             format: isBulleted ? "bullets" : "paragraph",
             bullets: bullets,
-            self_corrections: [],
+            self_corrections: corrections.map(\.summary),
             low_confidence_spans: [],
-            notes: []
+            notes: notes
         )
     }
 

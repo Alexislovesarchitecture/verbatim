@@ -14,11 +14,18 @@ final class ContextPackBuilder {
                 .filter { !$0.isEmpty }
                 .prefix(3)
         )
+        let preset = refineSettings.preset(for: activeContext.styleCategory)
+        let presetDefinition = activeContext.styleCategory.presetDefinition(
+            for: preset,
+            emailSignatureName: refineSettings.emailSignatureName
+        )
 
         return ContextPack(
             activeAppName: activeContext.appName,
             bundleID: activeContext.bundleID,
             styleCategory: activeContext.styleCategory,
+            stylePreset: preset,
+            styleSummary: presetDefinition.ruleSummary,
             windowTitle: activeContext.windowTitle,
             focusedElementRole: activeContext.focusedElementRole,
             punctuationMode: logicSettings.outputFormat == .paragraph ? "sentence" : "auto",

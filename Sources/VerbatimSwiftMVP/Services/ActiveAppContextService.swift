@@ -21,6 +21,7 @@ final class ActiveAppContextService: ActiveAppContextServiceProtocol {
         return ActiveAppContext(
             appName: resolvedName,
             bundleID: resolvedBundle,
+            processIdentifier: pid,
             styleCategory: styleCategory(bundleID: resolvedBundle, appName: resolvedName),
             windowTitle: focusedWindowTitle(pid: pid),
             focusedElementRole: focusedElementRole(pid: pid)
@@ -29,6 +30,7 @@ final class ActiveAppContextService: ActiveAppContextServiceProtocol {
         return ActiveAppContext(
             appName: "Unknown App",
             bundleID: "unknown.bundle",
+            processIdentifier: nil,
             styleCategory: .other,
             windowTitle: nil,
             focusedElementRole: nil
@@ -41,6 +43,14 @@ final class ActiveAppContextService: ActiveAppContextServiceProtocol {
 
         if combined.contains("mail") || combined.contains("outlook") || combined.contains("spark") {
             return .email
+        }
+
+        if combined.contains("linear")
+            || combined.contains("notes")
+            || combined.contains("obsidian")
+            || combined.contains("bear")
+            || combined.contains("drafts") {
+            return .other
         }
 
         if combined.contains("slack") || combined.contains("teams") || combined.contains("notion") || combined.contains("jira") {

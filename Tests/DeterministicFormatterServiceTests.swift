@@ -27,4 +27,15 @@ final class DeterministicFormatterServiceTests: XCTestCase {
         XCTAssertTrue(result.removedFillers.isEmpty)
         XCTAssertTrue(result.text.lowercased().contains("uh"))
     }
+
+    func testDeterministicFormattingPreservesIMeanForResolverStage() {
+        let sut = DeterministicFormatterService()
+        var settings = LogicSettings()
+        settings.removeFillerWords = true
+
+        let result = sut.format(text: "send that to John i mean Jane", settings: settings, glossary: [])
+
+        XCTAssertFalse(result.removedFillers.contains { $0.lowercased().contains("i mean") })
+        XCTAssertTrue(result.text.lowercased().contains("i mean"))
+    }
 }

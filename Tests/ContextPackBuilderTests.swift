@@ -19,6 +19,7 @@ final class ContextPackBuilderTests: XCTestCase {
             activeContext: ActiveAppContext(
                 appName: "Mail",
                 bundleID: "com.apple.mail",
+                processIdentifier: 321,
                 styleCategory: .email,
                 windowTitle: "Inbox",
                 focusedElementRole: "AXTextArea"
@@ -29,9 +30,11 @@ final class ContextPackBuilderTests: XCTestCase {
         )
 
         XCTAssertEqual(context.styleCategory, .email)
+        XCTAssertEqual(context.stylePreset, .formal)
         XCTAssertEqual(context.glossary.count, 1)
         XCTAssertEqual(context.glossary.first?.to, "ADU")
         XCTAssertEqual(context.sessionMemory.count, 3)
+        XCTAssertEqual(context.styleSummary, "Caps: full. Punctuation: full. Format: email. Structure: greeting, body, sign-off.")
         XCTAssertEqual(context.outputFormat, .auto)
         XCTAssertEqual(context.selfCorrectionMode, .keepFinal)
         XCTAssertTrue(context.flagLowConfidenceWords)

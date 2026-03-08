@@ -26,6 +26,8 @@ final class LLMFormatterRouterTests: XCTestCase {
             activeAppName: "Mail",
             bundleID: "com.apple.mail",
             styleCategory: .email,
+            stylePreset: .formal,
+            styleSummary: "Caps: full. Punctuation: full. Format: email. Structure: greeting, body, sign-off.",
             windowTitle: "Inbox",
             focusedElementRole: "AXTextArea",
             punctuationMode: "sentence",

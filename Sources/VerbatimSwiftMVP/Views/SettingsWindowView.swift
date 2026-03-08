@@ -5,6 +5,7 @@ import AppKit
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case general
+    case testing
     case transcription
     case logic
 
@@ -14,6 +15,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "General"
+        case .testing:
+            return "Testing"
         case .transcription:
             return "Transcription"
         case .logic:
@@ -25,6 +28,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "Hotkeys, listening feedback, and insertion behavior."
+        case .testing:
+            return "Record, review, and manually reformat transcripts away from the home screen."
         case .transcription:
             return "Speech engine, API key, and transcription controls."
         case .logic:
@@ -36,6 +41,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "gearshape"
+        case .testing:
+            return "waveform.and.mic"
         case .transcription:
             return "waveform"
         case .logic:
@@ -47,6 +54,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return .mint
+        case .testing:
+            return .cobalt
         case .transcription:
             return .amber
         case .logic:
@@ -194,6 +203,12 @@ struct SettingsWindowView: View {
                             permissionPanel
                                 .applyLiquidCardStyle(cornerRadius: 28, tone: .cream, padding: 22)
                         }
+                    case .testing:
+                        LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
+                            testingCapturePanel
+                            testingReviewPanel
+                        }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
                     case .transcription:
                         LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
                             transcriptionModeCard
@@ -370,15 +385,139 @@ struct SettingsWindowView: View {
     }
 
     private var permissionPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             panelHeading(
                 title: "Accessibility Permission",
-                subtitle: "The global hotkey and insertion flows need Accessibility access."
+                subtitle: "Fn / Globe hotkeys and insertion need Accessibility access."
             )
 
-            Text("Grant permission in System Settings > Privacy & Security > Accessibility.")
+            Text("Prompt macOS for access, then enable Verbatim in System Settings > Privacy & Security > Accessibility.")
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
+
+            Button("Prompt Accessibility Access") {
+                viewModel.requestAccessibilityPermissionPrompt()
+            }
+            .applyGlassButtonStyle(prominent: true)
+        }
+    }
+
+    private var testingCapturePanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            panelHeading(
+                title: "Live Dictation",
+                subtitle: "Use this area as the testing ground for recording, inserting, and validating transcript behavior."
+            )
+
+            Text("Testing moved out of Home so your main screen can stay focused on transcript history.")
+                .font(.body)
+                .foregroundStyle(VerbatimPalette.ink)
+
+            HStack(spacing: 12) {
+                Button(action: handleTestingPrimaryAction) {
+                    Label(testingPrimaryButtonTitle, systemImage: testingPrimaryButtonSymbol)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                }
+                .applyGlassButtonStyle(prominent: true)
+                .disabled(!viewModel.canToggleRecording)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(testingStateLabel, systemImage: testingStatusSymbol)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+                        .applyStatusBadgeEffect()
+
+                    Text(testingEngineSummary)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+                }
+                .frame(maxWidth: 220, alignment: .leading)
+            }
+
+            Text(viewModel.statusMessage)
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
+        }
+    }
+
+    private var testingReviewPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Review")
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .tracking(1.4)
+                        .foregroundStyle(AppSectionAccent.cobalt.tint)
+
+                    Text("Current Transcript")
+                        .font(.system(size: 24, weight: .medium, design: .serif))
+                        .foregroundStyle(VerbatimPalette.ink)
+                }
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 8) {
+                    Menu {
+                        ForEach(viewModel.promptProfiles) { profile in
+                            Button(profile.name) {
+                                viewModel.runManualReformat(profileID: profile.id)
+                            }
+                            .disabled(viewModel.transcript == nil || !profile.enabled || isBusy)
+                        }
+                    } label: {
+                        Label("Reformat", systemImage: "wand.and.stars")
+                    }
+                    .applyGlassButtonStyle()
+                    .disabled(viewModel.transcript == nil || viewModel.promptProfiles.isEmpty)
+
+                    Button {
+                        viewModel.copyTranscript()
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .applyGlassButtonStyle()
+                    .disabled(!testingHasTranscriptText)
+
+                    Button {
+                        viewModel.clearTranscript()
+                    } label: {
+                        Label("Clear", systemImage: "trash")
+                    }
+                    .applyGlassButtonStyle()
+                    .disabled(!testingHasTranscriptText)
+                }
+            }
+
+            if viewModel.shouldShowTranscriptTabs {
+                Picker("Transcript view", selection: $viewModel.selectedTranscriptViewMode) {
+                    ForEach(TranscriptViewMode.allCases) { mode in
+                        Text(mode == .raw ? "Raw" : "Formatted").tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 240)
+                .disabled(viewModel.transcript == nil || viewModel.formattedOutput == nil)
+            }
+
+            if let warning = viewModel.lastErrorSummary,
+               !warning.isEmpty,
+               viewModel.selectedTranscriptViewMode == .formatted {
+                Text(warning)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            ScrollView(showsIndicators: false) {
+                Text(testingActiveTranscriptText)
+                    .font(.system(size: 16, weight: .regular, design: .rounded))
+                    .foregroundStyle(testingHasTranscriptText ? VerbatimPalette.ink : VerbatimPalette.mutedInk)
+                    .frame(maxWidth: .infinity, minHeight: 260, alignment: .topLeading)
+                    .textSelection(.enabled)
+                    .lineSpacing(4)
+            }
+            .applyInsetWellStyle(cornerRadius: 24, padding: 18)
         }
     }
 
@@ -887,6 +1026,84 @@ struct SettingsWindowView: View {
         [GridItem(.adaptive(minimum: 320, maximum: 460), spacing: 18, alignment: .top)]
     }
 
+    private var testingHasTranscriptText: Bool {
+        !testingActiveTranscriptText.isEmpty && testingActiveTranscriptText != "Your transcript will appear here after recording."
+    }
+
+    private var testingEngineSummary: String {
+        let transMode = viewModel.transcriptionMode == .remote ? "Remote STT" : "Local STT"
+        let logicMode = viewModel.logicMode == .remote ? "Remote logic" : "Local logic"
+        return "\(transMode) / \(logicMode)"
+    }
+
+    private var testingPrimaryButtonTitle: String {
+        switch viewModel.state {
+        case .recording:
+            return "Stop"
+        case .transcribing, .formatting:
+            return "Processing..."
+        case .idle, .done, .error:
+            return "Start recording"
+        }
+    }
+
+    private var testingPrimaryButtonSymbol: String {
+        viewModel.state == .recording ? "stop.fill" : "mic.fill"
+    }
+
+    private var testingStateLabel: String {
+        switch viewModel.state {
+        case .idle:
+            return "Ready"
+        case .recording:
+            return "Recording"
+        case .transcribing:
+            return "Transcribing"
+        case .formatting:
+            return "Formatting"
+        case .done:
+            return "Complete"
+        case .error:
+            return "Error"
+        }
+    }
+
+    private var testingStatusSymbol: String {
+        switch viewModel.state {
+        case .idle:
+            return "checkmark.circle"
+        case .recording:
+            return "waveform"
+        case .transcribing:
+            return "hourglass"
+        case .formatting:
+            return "brain"
+        case .done:
+            return "checkmark.seal"
+        case .error:
+            return "exclamationmark.triangle"
+        }
+    }
+
+    private var testingActiveTranscriptText: String {
+        guard let transcript = viewModel.transcript else {
+            return "Your transcript will appear here after recording."
+        }
+
+        switch viewModel.selectedTranscriptViewMode {
+        case .raw:
+            return testingRenderRawTranscript(transcript)
+        case .formatted:
+            if let output = viewModel.formattedOutput {
+                return testingRenderFormattedOutput(output, transcript: transcript)
+            }
+            if let deterministic = viewModel.deterministicResult?.text, !deterministic.isEmpty {
+                return deterministic
+            }
+            return testingRenderRawTranscript(transcript)
+        }
+    }
+
     private var isBusy: Bool {
         switch viewModel.state {
         case .recording, .transcribing, .formatting:
@@ -902,6 +1119,58 @@ struct SettingsWindowView: View {
         }
 
         return model.allowedResponseFormats
+    }
+
+    private func handleTestingPrimaryAction() {
+        switch viewModel.state {
+        case .recording:
+            viewModel.stop()
+        default:
+            viewModel.start()
+        }
+    }
+
+    private func testingRenderRawTranscript(_ transcript: Transcript) -> String {
+        if transcript.segments.isEmpty {
+            return transcript.rawText
+        }
+
+        let hasSpeakerData = transcript.segments.contains { !($0.speaker?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? false) }
+        if !hasSpeakerData {
+            return transcript.rawText.isEmpty
+                ? transcript.segments.map(\.text).joined(separator: " ")
+                : transcript.rawText
+        }
+
+        return transcript.segments
+            .map { segment in
+                let prefix = segment.speaker.map { "[\($0)] " } ?? ""
+                return "\(prefix)\(segment.text)"
+            }
+            .joined(separator: "\n")
+    }
+
+    private func testingRenderFormattedOutput(_ output: FormattedOutput, transcript: Transcript) -> String {
+        if testingTranscriptHasSpeakerData(transcript) && !output.clean_text.contains("[") {
+            if !transcript.rawText.isEmpty {
+                return transcript.rawText
+            }
+        }
+
+        if output.format == "bullets" && !output.bullets.isEmpty {
+            let bullets = output.bullets.map { "• \($0)" }.joined(separator: "\n")
+            return bullets.isEmpty ? transcript.rawText : bullets
+        }
+        if !output.clean_text.isEmpty {
+            return output.clean_text
+        }
+        return transcript.rawText
+    }
+
+    private func testingTranscriptHasSpeakerData(_ transcript: Transcript) -> Bool {
+        transcript.segments.contains { segment in
+            !(segment.speaker?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        }
     }
 }
 

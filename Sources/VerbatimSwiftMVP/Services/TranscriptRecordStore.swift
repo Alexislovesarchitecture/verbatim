@@ -8,6 +8,7 @@ protocol TranscriptRecordStoreProtocol: AnyObject {
     func fetchCachedResult(for key: LLMCacheKey) -> LLMResult?
     func saveCachedResult(_ result: LLMResult, for key: LLMCacheKey)
     func appendRecord(_ record: TranscriptRecord)
+    func fetchRecentRecords(limit: Int) -> [TranscriptRecord]
     func makeCacheKey(profile: PromptProfile, modelID: String, contextPack: ContextPack, deterministicText: String) -> LLMCacheKey
 }
 
@@ -156,6 +157,70 @@ final class TranscriptRecordStore: TranscriptRecordStoreProtocol {
         bindText(record.styleCategory.rawValue, to: statement, index: 16)
 
         _ = sqlite3_step(statement)
+    }
+
+    func fetchRecentRecords(limit: Int) -> [TranscriptRecord] {
+        guard let db else { return [] }
+
+        let sql = """
+        SELECT created_at, raw_text, deterministic_text, llm_text, llm_json, llm_status, validation_status,
+               profile_id, profile_version, model_id, tokens, cached_tokens, latency_ms,
+               active_app_name, bundle_id, style_category
+        FROM transcript_records
+        ORDER BY created_at DESC
+        LIMIT ?
+        """
+
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return []
+        }
+        defer { sqlite3_finalize(statement) }
+
+        sqlite3_bind_int(statement, 1, Int32(max(0, limit)))
+
+        var records: [TranscriptRecord] = []
+        while sqlite3_step(statement) == SQLITE_ROW {
+            let createdAt = Date(timeIntervalSince1970: sqlite3_column_double(statement, 0))
+            let rawText = stringColumn(statement, index: 1) ?? ""
+            let deterministicText = stringColumn(statement, index: 2) ?? ""
+            let llmText = stringColumn(statement, index: 3)
+            let llmJSON = stringColumn(statement, index: 4)
+            let llmStatus = stringColumn(statement, index: 5).flatMap(LLMResultStatus.init(rawValue:))
+            let validationStatus = stringColumn(statement, index: 6).flatMap(LLMValidationStatus.init(rawValue:))
+            let profileID = stringColumn(statement, index: 7)
+            let profileVersion = sqlite3_column_type(statement, 8) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 8))
+            let modelID = stringColumn(statement, index: 9)
+            let tokens = sqlite3_column_type(statement, 10) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 10))
+            let cachedTokens = sqlite3_column_type(statement, 11) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 11))
+            let latencyMs = sqlite3_column_type(statement, 12) == SQLITE_NULL ? nil : Int(sqlite3_column_int(statement, 12))
+            let activeAppName = stringColumn(statement, index: 13) ?? ""
+            let bundleID = stringColumn(statement, index: 14) ?? ""
+            let styleCategory = stringColumn(statement, index: 15).flatMap(StyleCategory.init(rawValue:)) ?? .other
+
+            records.append(
+                TranscriptRecord(
+                    createdAt: createdAt,
+                    rawText: rawText,
+                    deterministicText: deterministicText,
+                    llmText: llmText,
+                    llmJSON: llmJSON,
+                    llmStatus: llmStatus,
+                    validationStatus: validationStatus,
+                    profileID: profileID,
+                    profileVersion: profileVersion,
+                    modelID: modelID,
+                    tokens: tokens,
+                    cachedTokens: cachedTokens,
+                    latencyMs: latencyMs,
+                    activeAppName: activeAppName,
+                    bundleID: bundleID,
+                    styleCategory: styleCategory
+                )
+            )
+        }
+
+        return records
     }
 
     func makeCacheKey(

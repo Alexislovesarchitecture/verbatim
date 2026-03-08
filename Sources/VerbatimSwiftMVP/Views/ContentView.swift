@@ -55,10 +55,58 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
     }
 }
 
+private struct StyleCategoryShowcase {
+    let title: String
+    let gradientColors: [Color]
+    let glowColor: Color
+    let appIcons: [(symbol: String, tint: Color)]
+}
+
+private enum DictionarySortMode {
+    case alphabeticalAscending
+    case alphabeticalDescending
+
+    var systemImage: String {
+        switch self {
+        case .alphabeticalAscending:
+            return "arrow.up.arrow.down"
+        case .alphabeticalDescending:
+            return "arrow.down.arrow.up"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .alphabeticalAscending:
+            return "Sort A to Z"
+        case .alphabeticalDescending:
+            return "Sort Z to A"
+        }
+    }
+}
+
+private struct TranscriptHistoryItem: Identifiable {
+    let id: String
+    let record: TranscriptRecord
+}
+
+private struct TranscriptHistorySection: Identifiable {
+    let id: String
+    let date: Date
+    let items: [TranscriptHistoryItem]
+}
+
 struct ContentView: View {
     @EnvironmentObject private var viewModel: TranscriptionViewModel
     @Environment(\.colorScheme) private var colorScheme
     @State private var isSettingsPresented = false
+    @AppStorage("verbatim.style.selectedCategory") private var selectedStyleCategoryStorage = StyleCategory.personal.rawValue
+    @State private var dictionarySearchText = ""
+    @State private var isDictionarySearchVisible = false
+    @State private var dictionarySortMode: DictionarySortMode = .alphabeticalAscending
+    @State private var isAddingDictionaryEntry = false
+    @State private var newDictionaryFromText = ""
+    @State private var newDictionaryToText = ""
 
     var body: some View {
         VerbatimGlassGroup(spacing: 14) {
@@ -74,6 +122,9 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isSettingsPresented) {
             settingsSheet
+        }
+        .sheet(isPresented: $isAddingDictionaryEntry) {
+            dictionaryAddSheet
         }
     }
 
@@ -176,18 +227,17 @@ struct ContentView: View {
 
     private var homeContent: some View {
         ScrollView(showsIndicators: false) {
-            VStack(spacing: 22) {
+            VStack(alignment: .leading, spacing: 24) {
                 sectionHeader(
                     eyebrow: viewModel.selectedSection.shortTitle.uppercased(),
-                    title: "Home",
-                    subtitle: viewModel.selectedSection.subtitle,
+                    title: homeTitle,
+                    subtitle: "Review recent transcripts by day, copy the cleaned output, and prepare feedback without reopening the last session.",
                     accent: viewModel.selectedSection.accent
                 ) {
-                    workspaceHeaderActions
+                    EmptyView()
                 }
 
-                workspaceHeroCard
-                transcriptCard
+                transcriptHistoryContent
             }
             .padding(30)
             .frame(maxWidth: 1040)
@@ -197,18 +247,77 @@ struct ContentView: View {
 
     private var dictionaryContent: some View {
         ScrollView(showsIndicators: false) {
-            VStack(spacing: 22) {
-                sectionHeader(
-                    eyebrow: viewModel.selectedSection.shortTitle.uppercased(),
-                    title: "Dictionary",
-                    subtitle: viewModel.selectedSection.subtitle,
-                    accent: viewModel.selectedSection.accent
-                ) {
-                    EmptyView()
+            VStack(alignment: .leading, spacing: 22) {
+                HStack(alignment: .top) {
+                    Text("Dictionary")
+                        .font(.system(size: 40, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    Spacer(minLength: 16)
+
+                    Button("Add new") {
+                        openDictionaryAddFlow()
+                    }
+                    .font(.system(size: 16, weight: .semibold, design: .rounded))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 16)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color.primary.opacity(colorScheme == .dark ? 0.92 : 0.96))
+                    )
+                    .foregroundStyle(Color.white)
+                    .buttonStyle(.plain)
                 }
 
-                dictionaryOverviewCard
-                dictionaryEditorCard
+                HStack(alignment: .bottom) {
+                    Text("All")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    Spacer(minLength: 16)
+
+                    HStack(spacing: 14) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.16)) {
+                                isDictionarySearchVisible.toggle()
+                            }
+                            if !isDictionarySearchVisible {
+                                dictionarySearchText = ""
+                            }
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                        }
+                        .accessibilityLabel("Toggle search")
+
+                        Button {
+                            dictionarySortMode = dictionarySortMode == .alphabeticalAscending
+                                ? .alphabeticalDescending
+                                : .alphabeticalAscending
+                        } label: {
+                            Image(systemName: dictionarySortMode.systemImage)
+                        }
+                        .accessibilityLabel(dictionarySortMode.accessibilityLabel)
+
+                        Button {
+                            resetDictionaryControls()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .accessibilityLabel("Reset dictionary filters")
+                    }
+                    .font(.system(size: 24, weight: .medium))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+                    .buttonStyle(.plain)
+                }
+
+                if isDictionarySearchVisible {
+                    TextField("Search dictionary", text: $dictionarySearchText)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .frame(maxWidth: 360)
+                }
+
+                dictionaryListCard
             }
             .padding(30)
             .frame(maxWidth: 1040)
@@ -218,28 +327,68 @@ struct ContentView: View {
 
     private var styleContent: some View {
         ScrollView(showsIndicators: false) {
-            VStack(spacing: 22) {
-                sectionHeader(
-                    eyebrow: viewModel.selectedSection.shortTitle.uppercased(),
-                    title: "Style",
-                    subtitle: viewModel.selectedSection.subtitle,
-                    accent: viewModel.selectedSection.accent
-                ) {
-                    EmptyView()
+            VStack(alignment: .leading, spacing: 22) {
+                Text("Style")
+                    .font(.system(size: 40, weight: .semibold, design: .rounded))
+                    .foregroundStyle(VerbatimPalette.ink)
+
+                styleCategoryTabs
+                styleCategoryHeroCard
+
+                LazyVGrid(columns: stylePresetColumns, alignment: .leading, spacing: 18) {
+                    ForEach(selectedStyleCategory.availablePresets) { preset in
+                        stylePresetCard(for: preset)
+                    }
                 }
 
-                styleOverviewCard
-
-                LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
-                    styleCategoriesCard
-                    styleMemoryCard
-                }
-
-                styleProfilesCard
+                styleCategorySettingsCard
             }
             .padding(30)
             .frame(maxWidth: 1040)
             .frame(maxWidth: .infinity)
+        }
+    }
+
+    private var transcriptHistoryContent: some View {
+        let sections = transcriptHistorySections
+
+        return VStack(alignment: .leading, spacing: 26) {
+            if sections.isEmpty {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("No transcripts yet")
+                        .font(.system(size: 22, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    Text("Use the testing tools in Settings to record, reformat, and review transcripts. Finished sessions will appear here automatically.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+
+                    Button("Open testing tools") {
+                        openSettingsWindow()
+                    }
+                    .applyGlassButtonStyle(prominent: true)
+                }
+                .frame(maxWidth: .infinity, minHeight: 220, alignment: .leading)
+                .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 24)
+            } else {
+                ForEach(sections) { section in
+                    VStack(alignment: .leading, spacing: 12) {
+                        if let relativeLabel = relativeHistoryLabel(for: section.date) {
+                            Text(relativeLabel)
+                                .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                .tracking(1.6)
+                                .foregroundStyle(VerbatimPalette.mutedInk)
+                        }
+
+                        Text(historyDateTitle(for: section.date))
+                            .font(.system(size: 18, weight: .semibold, design: .rounded))
+                            .tracking(1.2)
+                            .foregroundStyle(VerbatimPalette.ink.opacity(0.72))
+
+                        transcriptHistoryCard(for: section)
+                    }
+                }
+            }
         }
     }
 
@@ -249,6 +398,54 @@ struct ContentView: View {
             .preferredColorScheme(viewModel.appearanceMode.preferredColorScheme)
             .applyWindowChrome()
             .frame(minWidth: 940, minHeight: 700)
+    }
+
+    private var dictionaryAddSheet: some View {
+        ZStack {
+            ambientBackground
+
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Add Dictionary Entry")
+                    .font(.system(size: 28, weight: .medium, design: .serif))
+                    .foregroundStyle(VerbatimPalette.ink)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("What Verbatim hears")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    TextField("Example: screed", text: $newDictionaryFromText)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("Correct output")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    TextField("Example: Screed", text: $newDictionaryToText)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("Use the exact term you want preserved during cleanup and formatting.")
+                        .font(.caption)
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+                }
+
+                HStack(spacing: 10) {
+                    Button("Save Entry") {
+                        addDictionaryEntry()
+                    }
+                    .applyGlassButtonStyle(prominent: true)
+                    .disabled(trimmedNewDictionaryFromText.isEmpty || trimmedNewDictionaryToText.isEmpty)
+
+                    Button("Cancel") {
+                        closeDictionaryAddFlow()
+                    }
+                    .applyGlassButtonStyle()
+                }
+            }
+            .frame(minWidth: 520)
+            .applyLiquidCardStyle(cornerRadius: 30, tone: .frost, padding: 24)
+            .padding(26)
+        }
     }
 
     private var actionItemsSheet: some View {
@@ -304,6 +501,88 @@ struct ContentView: View {
             .applyLiquidCardStyle(cornerRadius: 30, tone: .frost, padding: 24)
             .padding(26)
         }
+    }
+
+    private func transcriptHistoryCard(for section: TranscriptHistorySection) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(section.items.enumerated()), id: \.element.id) { index, item in
+                transcriptHistoryRow(for: item.record)
+
+                if index < section.items.count - 1 {
+                    Rectangle()
+                        .fill(Color.primary.opacity(0.08))
+                        .frame(height: 1)
+                }
+            }
+        }
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.68))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                )
+        )
+    }
+
+    private func transcriptHistoryRow(for record: TranscriptRecord) -> some View {
+        HStack(alignment: .top, spacing: 20) {
+            Text(historyTimeLabel(for: record.createdAt))
+                .font(.system(size: 18, weight: .medium, design: .rounded))
+                .foregroundStyle(VerbatimPalette.ink.opacity(0.78))
+                .frame(width: 116, alignment: .leading)
+
+            Text(viewModel.preferredTranscriptText(for: record))
+                .font(.system(size: 18, weight: .medium, design: .rounded))
+                .foregroundStyle(VerbatimPalette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(.leading)
+                .textSelection(.enabled)
+
+            HStack(spacing: 12) {
+                Button {
+                    viewModel.copyTranscriptRecord(record)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .help("Copy transcript")
+
+                Button {
+                    viewModel.copyTranscriptFeedbackPacket(record)
+                } label: {
+                    Image(systemName: "flag")
+                }
+                .help("Send feedback")
+
+                Menu {
+                    Button("Copy transcript") {
+                        viewModel.copyTranscriptRecord(record)
+                    }
+
+                    Button("Copy raw transcript") {
+                        viewModel.copyRawTranscriptRecord(record)
+                    }
+
+                    Button("Copy feedback packet") {
+                        viewModel.copyTranscriptFeedbackPacket(record)
+                    }
+
+                    Divider()
+
+                    Button("Open testing tools") {
+                        openSettingsWindow()
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.vertical")
+                }
+                .help("More actions")
+            }
+            .font(.system(size: 21, weight: .medium))
+            .foregroundStyle(VerbatimPalette.ink.opacity(0.78))
+            .buttonStyle(.plain)
+        }
+        .padding(.horizontal, 26)
+        .padding(.vertical, 24)
     }
 
     private var workspaceHeaderActions: some View {
@@ -442,163 +721,180 @@ struct ContentView: View {
         }
     }
 
-    private var dictionaryOverviewCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 18) {
+    private var dictionaryListCard: some View {
+        let entries = filteredDictionaryEntries
+
+        return VStack(spacing: 0) {
+            if entries.isEmpty {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Words Verbatim should never miss.")
-                        .font(.system(size: 36, weight: .medium, design: .serif))
+                    Text(dictionarySearchText.isEmpty ? "No dictionary entries yet." : "No dictionary matches.")
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
                         .foregroundStyle(VerbatimPalette.ink)
 
-                    Text("Use dictionary entries for names, firms, places, and repeat terminology. These mappings feed cleanup and model routing without hiding them in settings.")
-                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                    Text(dictionarySearchText.isEmpty
+                        ? "Add names, firms, places, and repeat terminology so Verbatim preserves them during cleanup."
+                        : "Try another search term or reset the filters.")
+                        .font(.system(size: 14, weight: .medium, design: .rounded))
                         .foregroundStyle(VerbatimPalette.mutedInk)
                 }
-
-                Spacer(minLength: 16)
-
-                VerbatimBrandMark(size: 72)
-                    .padding(16)
-                    .applyInsetWellStyle(cornerRadius: 26, padding: 14)
-            }
-
-            if viewModel.refineSettings.glossary.isEmpty {
-                Text("No dictionary entries yet. Add lines below using `from=>to` format.")
-                    .font(.system(size: 14, weight: .medium, design: .rounded))
-                    .foregroundStyle(VerbatimPalette.mutedInk)
+                .frame(maxWidth: .infinity, minHeight: 220, alignment: .leading)
+                .padding(28)
             } else {
-                LazyVGrid(columns: dictionaryColumns, alignment: .leading, spacing: 10) {
-                    ForEach(viewModel.refineSettings.glossary) { entry in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(entry.from)
-                                .font(.system(size: 13, weight: .semibold, design: .rounded))
-                                .foregroundStyle(VerbatimPalette.ink)
-                            Text(entry.to)
-                                .font(.system(size: 12, weight: .medium, design: .rounded))
-                                .foregroundStyle(VerbatimPalette.mutedInk)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .applyInsetWellStyle(cornerRadius: 18, padding: 12)
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                    dictionaryRow(for: entry)
+
+                    if index < entries.count - 1 {
+                        Rectangle()
+                            .fill(Color.primary.opacity(0.08))
+                            .frame(height: 1)
                     }
                 }
             }
         }
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.68))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 24, style: .continuous)
+                        .stroke(Color.primary.opacity(0.10), lineWidth: 1)
+                )
+        )
     }
 
-    private var dictionaryEditorCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            panelHeading(
-                title: "Edit Dictionary",
-                subtitle: "One mapping per line. Example: `Screed=>SCREED` or `Eulogio=>Eulogio`."
-            )
+    private func dictionaryRow(for entry: GlossaryEntry) -> some View {
+        HStack(alignment: .center, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(dictionaryDisplayText(for: entry))
+                    .font(.system(size: 18, weight: .medium, design: .rounded))
+                    .foregroundStyle(VerbatimPalette.ink)
 
-            TextField("from=>to, one per line", text: glossaryMappingsBinding, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(8...16)
-                .font(.system(.body, design: .rounded))
+                if dictionarySecondaryText(for: entry) != nil {
+                    Text(dictionarySecondaryText(for: entry) ?? "")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+                }
+            }
 
-            Text("These replacements are applied case-insensitively during cleanup.")
-                .font(.caption)
-                .foregroundStyle(VerbatimPalette.mutedInk)
+            Spacer()
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 22)
+    }
+
+    private var styleCategoryTabs: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 34) {
+                ForEach(StyleCategory.allCases) { category in
+                    Button {
+                        selectedStyleCategoryStorage = category.rawValue
+                    } label: {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(styleCategoryNavigationTitle(for: category))
+                                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                                .foregroundStyle(category == selectedStyleCategory ? VerbatimPalette.ink : VerbatimPalette.mutedInk)
+
+                            Rectangle()
+                                .fill(category == selectedStyleCategory ? VerbatimPalette.ink : Color.clear)
+                                .frame(height: 3)
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.10))
+                .frame(height: 1)
+                .offset(y: -1)
         }
     }
 
-    private var styleOverviewCard: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top, spacing: 18) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Tune the way cleanup sounds.")
-                        .font(.system(size: 36, weight: .medium, design: .serif))
-                        .foregroundStyle(VerbatimPalette.ink)
+    private var styleCategoryHeroCard: some View {
+        let showcase = styleCategoryShowcase(for: selectedStyleCategory)
 
-                    Text("Style controls stay separate from model settings now. Use this page to decide when refinement applies and which prompt profiles stay available.")
+        return ZStack {
+            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: showcase.gradientColors,
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+
+            Circle()
+                .fill(showcase.glowColor.opacity(0.36))
+                .frame(width: 260, height: 260)
+                .blur(radius: 90)
+                .offset(x: 180, y: 40)
+
+            HStack(spacing: 20) {
+                VStack(alignment: .leading, spacing: 14) {
+                    Text(showcase.title)
+                        .font(.system(size: 30, weight: .medium, design: .serif))
+                        .foregroundStyle(Color.white.opacity(0.96))
+
+                    Text("Style formatting only applies in English. More languages coming soon.")
                         .font(.system(size: 15, weight: .medium, design: .rounded))
-                        .foregroundStyle(VerbatimPalette.mutedInk)
+                        .foregroundStyle(Color.white.opacity(0.84))
                 }
 
                 Spacer(minLength: 16)
 
-                Label("Preview before insert", systemImage: viewModel.refineSettings.previewBeforeInsert ? "eye" : "eye.slash")
-                    .font(.system(size: 12, weight: .semibold, design: .rounded))
-                    .foregroundStyle(VerbatimPalette.ink)
-                    .applyStatusBadgeEffect()
-            }
-        }
-    }
-
-    private var styleCategoriesCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            panelHeading(
-                title: "Where Refinement Runs",
-                subtitle: "Choose the app contexts that should receive cleanup and tone-shaping."
-            )
-
-            LazyVGrid(columns: styleColumns, alignment: .leading, spacing: 12) {
-                ForEach(StyleCategory.allCases) { category in
-                    Toggle(isOn: refineEnabledBinding(for: category)) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(category.title)
-                                .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            Text(styleCategorySubtitle(for: category))
-                                .font(.system(size: 11, weight: .medium, design: .rounded))
-                                .foregroundStyle(VerbatimPalette.mutedInk)
-                        }
+                HStack(spacing: -12) {
+                    ForEach(Array(showcase.appIcons.enumerated()), id: \.offset) { _, item in
+                        styleHeroIcon(symbol: item.symbol, tint: item.tint)
                     }
-                    .toggleStyle(.switch)
-                    .applyInsetWellStyle(cornerRadius: 20, padding: 14)
-                }
-            }
 
-            Toggle("Preview before clipboard insert", isOn: $viewModel.refineSettings.previewBeforeInsert)
-        }
-    }
-
-    private var styleMemoryCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            panelHeading(
-                title: "Context Memory",
-                subtitle: "Keep reminders and recurring context close to the style layer."
-            )
-
-            TextField("One line per memory item", text: sessionMemoryBinding, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .lineLimit(6...12)
-        }
-    }
-
-    private var styleProfilesCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            panelHeading(
-                title: "Prompt Profiles",
-                subtitle: "Enable the cleanup profiles you want available from Home."
-            )
-
-            HStack {
-                Text("Available profiles")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(VerbatimPalette.mutedInk)
-
-                Spacer()
-
-                Button("Reload profiles", systemImage: "arrow.clockwise") {
-                    viewModel.refreshPromptProfiles()
-                }
-                .applyGlassButtonStyle()
-                .disabled(isBusy)
-            }
-
-            VStack(spacing: 10) {
-                ForEach(viewModel.promptProfiles) { profile in
-                    Toggle(profile.name, isOn: Binding(
-                        get: { profile.enabled },
-                        set: { enabled in
-                            viewModel.setPromptProfileEnabled(profile.id, enabled: enabled)
+                    Circle()
+                        .fill(Color.white.opacity(0.10))
+                        .overlay(
+                            Circle()
+                                .stroke(Color.white.opacity(0.18), lineWidth: 1.5)
+                        )
+                        .frame(width: 78, height: 78)
+                        .overlay {
+                            Image(systemName: "plus")
+                                .font(.system(size: 26, weight: .semibold))
+                                .foregroundStyle(Color.white.opacity(0.55))
                         }
-                    ))
-                    .applyInsetWellStyle(cornerRadius: 18, padding: 12)
+                }
+            }
+            .padding(.horizontal, 34)
+            .padding(.vertical, 28)
+        }
+        .frame(minHeight: 220)
+    }
+
+    private var styleCategorySettingsCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 18) {
+                Toggle("Apply automatically in this category", isOn: refineEnabledBinding(for: selectedStyleCategory))
+
+                Spacer(minLength: 12)
+
+                Toggle("Preview before insert", isOn: $viewModel.refineSettings.previewBeforeInsert)
+            }
+
+            if selectedStyleCategory == .email {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Email sign-off name")
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    TextField("Your name for 'Best regards'", text: $viewModel.refineSettings.emailSignatureName)
+                        .textFieldStyle(.roundedBorder)
+
+                    Text("Email presets will always structure a greeting, body, and closing. If this is blank, the closing keeps 'Best regards,' without a name line.")
+                        .font(.caption)
+                        .foregroundStyle(VerbatimPalette.mutedInk)
                 }
             }
         }
+        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
     }
 
     private var hotkeyCapturePanel: some View {
@@ -685,15 +981,20 @@ struct ContentView: View {
     }
 
     private var permissionPanel: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             panelHeading(
                 title: "Accessibility Permission",
-                subtitle: "The global hotkey and insertion flows need Accessibility access."
+                subtitle: "Fn / Globe hotkeys and insertion need Accessibility access."
             )
 
-            Text("Grant permission in System Settings > Privacy & Security > Accessibility.")
+            Text("Prompt macOS for access, then enable Verbatim in System Settings > Privacy & Security > Accessibility.")
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
+
+            Button("Prompt Accessibility Access") {
+                viewModel.requestAccessibilityPermissionPrompt()
+            }
+            .applyGlassButtonStyle(prominent: true)
         }
     }
 
@@ -1231,6 +1532,82 @@ struct ContentView: View {
         .opacity(isAvailable ? 1 : 0.68)
     }
 
+    private var filteredDictionaryEntries: [GlossaryEntry] {
+        let query = dictionarySearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let filtered = viewModel.refineSettings.glossary.filter { entry in
+            guard !query.isEmpty else { return true }
+            return entry.from.lowercased().contains(query) || entry.to.lowercased().contains(query)
+        }
+
+        return filtered.sorted { lhs, rhs in
+            let left = dictionaryDisplayText(for: lhs).localizedLowercase
+            let right = dictionaryDisplayText(for: rhs).localizedLowercase
+
+            switch dictionarySortMode {
+            case .alphabeticalAscending:
+                return left < right
+            case .alphabeticalDescending:
+                return left > right
+            }
+        }
+    }
+
+    private var trimmedNewDictionaryFromText: String {
+        newDictionaryFromText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var trimmedNewDictionaryToText: String {
+        newDictionaryToText.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func dictionaryDisplayText(for entry: GlossaryEntry) -> String {
+        let corrected = entry.to.trimmingCharacters(in: .whitespacesAndNewlines)
+        return corrected.isEmpty ? entry.from : corrected
+    }
+
+    private func dictionarySecondaryText(for entry: GlossaryEntry) -> String? {
+        let heard = entry.from.trimmingCharacters(in: .whitespacesAndNewlines)
+        let corrected = entry.to.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !heard.isEmpty, !corrected.isEmpty else { return nil }
+        guard heard.caseInsensitiveCompare(corrected) != .orderedSame else { return nil }
+        return "Heard as \(heard)"
+    }
+
+    private func openDictionaryAddFlow() {
+        newDictionaryFromText = ""
+        newDictionaryToText = ""
+        isAddingDictionaryEntry = true
+    }
+
+    private func closeDictionaryAddFlow() {
+        isAddingDictionaryEntry = false
+        newDictionaryFromText = ""
+        newDictionaryToText = ""
+    }
+
+    private func addDictionaryEntry() {
+        let from = trimmedNewDictionaryFromText
+        let to = trimmedNewDictionaryToText
+        guard !from.isEmpty, !to.isEmpty else { return }
+
+        let newEntry = GlossaryEntry(from: from, to: to)
+        if let existingIndex = viewModel.refineSettings.glossary.firstIndex(where: {
+            $0.from.caseInsensitiveCompare(from) == .orderedSame
+        }) {
+            viewModel.refineSettings.glossary[existingIndex] = newEntry
+        } else {
+            viewModel.refineSettings.glossary.append(newEntry)
+        }
+
+        closeDictionaryAddFlow()
+    }
+
+    private func resetDictionaryControls() {
+        dictionarySearchText = ""
+        isDictionarySearchVisible = false
+        dictionarySortMode = .alphabeticalAscending
+    }
+
     private var actionItemsPreviewBinding: Binding<Bool> {
         Binding(
             get: { viewModel.pendingActionItemsJSON != nil },
@@ -1288,16 +1665,376 @@ struct ContentView: View {
         )
     }
 
-    private func styleCategorySubtitle(for category: StyleCategory) -> String {
+    private var selectedStyleCategory: StyleCategory {
+        StyleCategory(rawValue: selectedStyleCategoryStorage) ?? .personal
+    }
+
+    private var stylePresetColumns: [GridItem] {
+        [GridItem(.adaptive(minimum: 260, maximum: 320), spacing: 18, alignment: .top)]
+    }
+
+    private func styleCategoryNavigationTitle(for category: StyleCategory) -> String {
         switch category {
-        case .work:
-            return "Docs, proposals, and internal writing."
-        case .email:
-            return "Mail and follow-ups."
         case .personal:
-            return "Texts, chats, and informal notes."
+            return "Personal messages"
+        case .work:
+            return "Work messages"
+        case .email:
+            return "Email"
         case .other:
-            return "Fallback for everything uncategorized."
+            return "Other"
+        }
+    }
+
+    private func stylePresetCard(for preset: StylePreset) -> some View {
+        let definition = selectedStyleCategory.presetDefinition(
+            for: preset,
+            emailSignatureName: viewModel.refineSettings.emailSignatureName
+        )
+        let isSelected = viewModel.refineSettings.preset(for: selectedStyleCategory) == preset
+
+        return Button {
+            viewModel.refineSettings.setPreset(preset, for: selectedStyleCategory)
+        } label: {
+            VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(stylePresetTitle(for: preset))
+                        .font(.system(size: 36, weight: .medium, design: .serif))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    Text(stylePresetFeatureLabel(for: selectedStyleCategory, preset: preset))
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+                }
+
+                Rectangle()
+                    .fill(Color.primary.opacity(0.10))
+                    .frame(height: 1)
+
+                stylePresetPreview(for: selectedStyleCategory, preset: preset)
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, minHeight: 430, alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .fill(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.68))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                            .stroke(
+                                isSelected ? AppSectionAccent.violet.tint.opacity(0.72) : Color.primary.opacity(0.10),
+                                lineWidth: isSelected ? 2.5 : 1
+                            )
+                    )
+            )
+            .shadow(
+                color: isSelected ? AppSectionAccent.violet.tint.opacity(0.10) : Color.black.opacity(0.02),
+                radius: isSelected ? 18 : 10,
+                x: 0,
+                y: 10
+            )
+            .overlay(alignment: .bottomTrailing) {
+                if isSelected {
+                    Text("Selected")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .foregroundStyle(AppSectionAccent.violet.tint)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(
+                            Capsule()
+                                .fill(AppSectionAccent.violet.glow.opacity(0.18))
+                        )
+                        .padding(18)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(definition.title) preset")
+    }
+
+    private func stylePresetTitle(for preset: StylePreset) -> String {
+        switch preset {
+        case .veryCasual:
+            return "very casual"
+        default:
+            return preset.title
+        }
+    }
+
+    private func stylePresetFeatureLabel(for category: StyleCategory, preset: StylePreset) -> String {
+        switch (category, preset) {
+        case (.personal, .formal), (.work, .formal), (.email, .formal), (.other, .formal):
+            return "Caps + Punctuation"
+        case (.personal, .casual), (.work, .casual), (.email, .casual), (.other, .casual):
+            return "Caps + Less punctuation"
+        case (.personal, .veryCasual):
+            return "No Caps + Less punctuation"
+        case (.work, .enthusiastic), (.email, .enthusiastic), (.other, .enthusiastic):
+            return "More expressive language"
+        default:
+            return preset.title
+        }
+    }
+
+    private func styleCategoryShowcase(for category: StyleCategory) -> StyleCategoryShowcase {
+        switch category {
+        case .personal:
+            return StyleCategoryShowcase(
+                title: "This style applies in personal messengers",
+                gradientColors: [
+                    Color(red: 0.24, green: 0.34, blue: 0.42),
+                    Color(red: 0.29, green: 0.16, blue: 0.11),
+                    Color(red: 0.30, green: 0.38, blue: 0.24)
+                ],
+                glowColor: Color(red: 0.86, green: 0.70, blue: 0.97),
+                appIcons: [
+                    ("message.fill", Color.green),
+                    ("phone.fill", Color(red: 0.30, green: 0.76, blue: 0.39)),
+                    ("paperplane.fill", Color.blue),
+                    ("bolt.horizontal.circle.fill", Color(red: 0.92, green: 0.38, blue: 0.67))
+                ]
+            )
+        case .work:
+            return StyleCategoryShowcase(
+                title: "This style applies in workplace messengers",
+                gradientColors: [
+                    Color(red: 0.21, green: 0.36, blue: 0.46),
+                    Color(red: 0.31, green: 0.16, blue: 0.10),
+                    Color(red: 0.28, green: 0.36, blue: 0.24)
+                ],
+                glowColor: Color(red: 0.88, green: 0.58, blue: 0.90),
+                appIcons: [
+                    ("message.badge.fill", Color(red: 0.14, green: 0.71, blue: 0.54)),
+                    ("person.2.fill", Color(red: 0.45, green: 0.48, blue: 0.91))
+                ]
+            )
+        case .email:
+            return StyleCategoryShowcase(
+                title: "This style applies in all major email apps",
+                gradientColors: [
+                    Color(red: 0.23, green: 0.39, blue: 0.50),
+                    Color(red: 0.34, green: 0.17, blue: 0.10),
+                    Color(red: 0.31, green: 0.39, blue: 0.26)
+                ],
+                glowColor: Color(red: 0.93, green: 0.63, blue: 0.78),
+                appIcons: [
+                    ("envelope.badge.fill", Color.orange),
+                    ("tray.full.fill", Color(red: 0.19, green: 0.20, blue: 0.24)),
+                    ("envelope.open.fill", Color(red: 0.20, green: 0.57, blue: 0.92)),
+                    ("paperplane.fill", Color(red: 0.28, green: 0.63, blue: 0.97))
+                ]
+            )
+        case .other:
+            return StyleCategoryShowcase(
+                title: "This style applies in all other apps",
+                gradientColors: [
+                    Color(red: 0.24, green: 0.36, blue: 0.43),
+                    Color(red: 0.23, green: 0.11, blue: 0.09),
+                    Color(red: 0.35, green: 0.41, blue: 0.31)
+                ],
+                glowColor: Color(red: 0.79, green: 0.66, blue: 0.95),
+                appIcons: [
+                    ("checklist", Color(red: 0.25, green: 0.35, blue: 0.82)),
+                    ("note.text", Color.white),
+                    ("square.and.pencil", Color.yellow)
+                ]
+            )
+        }
+    }
+
+    private func styleHeroIcon(symbol: String, tint: Color) -> some View {
+        Circle()
+            .fill(Color.white.opacity(0.12))
+            .overlay(
+                Circle()
+                    .stroke(Color.white.opacity(0.18), lineWidth: 1.5)
+            )
+            .frame(width: 78, height: 78)
+            .overlay {
+                Circle()
+                    .fill(tint.opacity(0.94))
+                    .frame(width: 48, height: 48)
+                    .overlay {
+                        Image(systemName: symbol)
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(tint == .white ? Color.black.opacity(0.82) : Color.white)
+                    }
+            }
+    }
+
+    @ViewBuilder
+    private func stylePresetPreview(for category: StyleCategory, preset: StylePreset) -> some View {
+        switch category {
+        case .personal:
+            personalStylePreview(for: preset)
+        case .work:
+            workStylePreview(for: preset)
+        case .email:
+            emailStylePreview(for: preset)
+        case .other:
+            otherStylePreview(for: preset)
+        }
+    }
+
+    private func personalStylePreview(for preset: StylePreset) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(personalPreviewText(for: preset))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(VerbatimPalette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(AppSectionAccent.violet.glow.opacity(0.08))
+                )
+
+            HStack {
+                Spacer()
+
+                Circle()
+                    .fill(stylePreviewAccent(for: preset).opacity(0.95))
+                    .frame(width: 74, height: 74)
+                    .overlay {
+                        Text("J")
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.white)
+                    }
+            }
+        }
+    }
+
+    private func workStylePreview(for preset: StylePreset) -> some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(stylePreviewAccent(for: preset).opacity(0.30))
+                    .frame(width: 82, height: 82)
+                    .overlay {
+                        Text("J")
+                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .foregroundStyle(Color.white)
+                    }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("John Doe 9:45 AM")
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink.opacity(0.74))
+
+                    Text(workPreviewText(for: preset))
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func emailStylePreview(for preset: StylePreset) -> some View {
+        let name = viewModel.refineSettings.emailSignatureName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let signoffName = name.isEmpty ? "Your Name" : name
+
+        return VStack(alignment: .leading, spacing: 12) {
+            Text("To: Alex Doe")
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            Rectangle()
+                .fill(Color.primary.opacity(0.08))
+                .frame(height: 1)
+
+            Text(emailPreviewBody(for: preset))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(VerbatimPalette.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Best regards,")
+                Text(signoffName)
+            }
+            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .foregroundStyle(VerbatimPalette.ink)
+        }
+    }
+
+    private func otherStylePreview(for preset: StylePreset) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Permit response note")
+                .font(.system(size: 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            Text(otherPreviewText(for: preset))
+                .font(.system(size: 16, weight: .semibold, design: .rounded))
+                .foregroundStyle(VerbatimPalette.ink)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(20)
+                .background(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .fill(AppSectionAccent.violet.glow.opacity(0.08))
+                )
+        }
+    }
+
+    private func personalPreviewText(for preset: StylePreset) -> String {
+        switch preset {
+        case .formal:
+            return "Hey, are you free for lunch tomorrow? Let's do 12 if that works for you."
+        case .casual:
+            return "Hey are you free for lunch tomorrow? Let's do 12 if that works for you"
+        case .veryCasual:
+            return "hey are you free for lunch tomorrow? let's do 12 if that works for you"
+        case .enthusiastic:
+            return "Hey, are you free for lunch tomorrow? Let's do 12 if that works for you!"
+        }
+    }
+
+    private func workPreviewText(for preset: StylePreset) -> String {
+        switch preset {
+        case .formal:
+            return "Hi, if you're free, let's chat about the project results."
+        case .casual:
+            return "Hey, if you're free let's chat about the project results"
+        case .enthusiastic:
+            return "Hey, if you're free, let's chat about the project results!"
+        case .veryCasual:
+            return "hey if you're free let's chat about the project results"
+        }
+    }
+
+    private func emailPreviewBody(for preset: StylePreset) -> String {
+        switch preset {
+        case .formal:
+            return "Hi Alex,\n\nIt was great talking with you today. Looking forward to our next chat."
+        case .casual:
+            return "Hi Alex,\n\nIt was great talking with you today. Looking forward to our next chat."
+        case .enthusiastic:
+            return "Hi Alex,\n\nIt was great talking with you today. Looking forward to our next chat!"
+        case .veryCasual:
+            return "hi alex,\n\nit was great talking with you today. looking forward to our next chat"
+        }
+    }
+
+    private func otherPreviewText(for preset: StylePreset) -> String {
+        switch preset {
+        case .formal:
+            return "Updated the permit response draft. It is ready for review."
+        case .casual:
+            return "updated the permit response draft ready for review"
+        case .enthusiastic:
+            return "Updated the permit response draft. Ready for review!"
+        case .veryCasual:
+            return "updated the permit response draft ready for review"
+        }
+    }
+
+    private func stylePreviewAccent(for preset: StylePreset) -> Color {
+        switch preset {
+        case .formal:
+            return Color(red: 0.84, green: 0.74, blue: 0.92)
+        case .casual:
+            return Color(red: 0.91, green: 0.64, blue: 0.87)
+        case .enthusiastic, .veryCasual:
+            return AppSectionAccent.violet.tint
         }
     }
 
@@ -1317,6 +2054,73 @@ struct ContentView: View {
         let transMode = viewModel.transcriptionMode == .remote ? "Remote STT" : "Local STT"
         let logicMode = viewModel.logicMode == .remote ? "Remote logic" : "Local logic"
         return "\(transMode) / \(logicMode)"
+    }
+
+    private var homeTitle: String {
+        let explicitName = viewModel.refineSettings.emailSignatureName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicitName.isEmpty {
+            return "Welcome back, \(explicitName)"
+        }
+
+        let firstName = NSFullUserName()
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .components(separatedBy: .whitespaces)
+            .first ?? ""
+
+        if !firstName.isEmpty {
+            return "Welcome back, \(firstName)"
+        }
+
+        return "Welcome back"
+    }
+
+    private var transcriptHistorySections: [TranscriptHistorySection] {
+        let calendar = Calendar.autoupdatingCurrent
+        let grouped = Dictionary(grouping: viewModel.transcriptHistory) { record in
+            calendar.startOfDay(for: record.createdAt)
+        }
+
+        return grouped.keys
+            .sorted(by: >)
+            .map { day in
+                let records = (grouped[day] ?? []).sorted { $0.createdAt > $1.createdAt }
+                let items = records.enumerated().map { index, record in
+                    TranscriptHistoryItem(
+                        id: "\(day.timeIntervalSince1970)-\(Int(record.createdAt.timeIntervalSince1970))-\(index)",
+                        record: record
+                    )
+                }
+                return TranscriptHistorySection(
+                    id: String(Int(day.timeIntervalSince1970)),
+                    date: day,
+                    items: items
+                )
+            }
+    }
+
+    private func relativeHistoryLabel(for date: Date) -> String? {
+        let calendar = Calendar.autoupdatingCurrent
+        if calendar.isDateInToday(date) {
+            return "TODAY"
+        }
+        if calendar.isDateInYesterday(date) {
+            return "YESTERDAY"
+        }
+        return nil
+    }
+
+    private func historyDateTitle(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.setLocalizedDateFormatFromTemplate("MMMM d, yyyy")
+        return formatter.string(from: date).uppercased()
+    }
+
+    private func historyTimeLabel(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = .autoupdatingCurrent
+        formatter.dateFormat = "hh:mm a"
+        return formatter.string(from: date)
     }
 
     private var hasTranscriptText: Bool {
