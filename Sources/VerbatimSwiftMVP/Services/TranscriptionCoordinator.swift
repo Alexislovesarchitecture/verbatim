@@ -5,7 +5,6 @@ enum TranscriptionCoordinatorError: LocalizedError {
     case sessionNotRecording
     case missingSessionRequest
     case missingRecordingArtifact
-    case unsupportedLocalModel(LocalTranscriptionModel)
 
     var errorDescription: String? {
         switch self {
@@ -17,8 +16,6 @@ enum TranscriptionCoordinatorError: LocalizedError {
             return "Missing transcription request context for this session."
         case .missingRecordingArtifact:
             return "Recording finished without a usable audio artifact."
-        case .unsupportedLocalModel(let model):
-            return "\(model.title) is not implemented yet for local transcription."
         }
     }
 }
@@ -29,21 +26,27 @@ final class TranscriptionCoordinator {
     private let remoteEngine: TranscriptionServiceProtocol
     private let localEngine: LocalTranscriptionServiceProtocol
     private let modelCatalogService: ModelCatalogServiceProtocol
+    private let audioActivityAnalyzer: AudioActivityAnalyzer
 
     private var activeSession: TranscriptionSession?
+    private var activeRecordingSession: RecordingSession?
     private var pendingRequest: TranscriptionSessionRequest?
     private var merger: TranscriptMerger?
 
     init(
         recorder: AudioRecorderServiceProtocol? = nil,
         remoteEngine: TranscriptionServiceProtocol = OpenAITranscriptionService(),
-        localEngine: LocalTranscriptionServiceProtocol = AppleLocalTranscriptionService(),
-        modelCatalogService: ModelCatalogServiceProtocol? = nil
+        localEngine: LocalTranscriptionServiceProtocol = ManagedLocalTranscriptionService(
+            whisperService: WhisperLocalTranscriptionService(modelManager: WhisperModelManager())
+        ),
+        modelCatalogService: ModelCatalogServiceProtocol? = nil,
+        audioActivityAnalyzer: AudioActivityAnalyzer = AudioActivityAnalyzer()
     ) {
         self.recorder = recorder ?? AudioRecorderService()
         self.remoteEngine = remoteEngine
         self.localEngine = localEngine
         self.modelCatalogService = modelCatalogService ?? OpenAIModelCatalogService()
+        self.audioActivityAnalyzer = audioActivityAnalyzer
     }
 
     func fetchRemoteModelIDs(apiKey: String?) async throws -> Set<String> {
@@ -68,6 +71,11 @@ final class TranscriptionCoordinator {
             stage: .recording
         )
         activeSession = session
+        if let context = request.recordingSessionContext {
+            activeRecordingSession = RecordingSession(context: context)
+        } else {
+            activeRecordingSession = nil
+        }
         pendingRequest = request
         merger = TranscriptMerger(
             fallbackModelID: request.options.modelID,
@@ -120,12 +128,40 @@ final class TranscriptionCoordinator {
             recorder.discardRecordingArtifact(artifact)
         }
 
+        let completionContext: RecordingSessionContext?
+        let source: TranscriptionSource
+        if let sessionContext = request.recordingSessionContext, sessionContext.shouldGateSilenceBeforeTranscription {
+            let summary = await audioActivityAnalyzer.analyze(
+                frames: artifact.frameStream,
+                sensitivity: request.interactionSettings.silenceSensitivity
+            )
+            let resolvedContext = sessionContext.withAudioActivitySummary(summary)
+            activeRecordingSession?.audioFileURL = artifact.audioFileURL
+            activeRecordingSession?.silenceAnalysis = summary
+            completionContext = resolvedContext
+
+            if audioActivityAnalyzer.shouldSkipTranscription(summary: summary, settings: request.interactionSettings) {
+                session.stage = .completed
+                session.endedAt = Date()
+                activeSession = session
+                activeRecordingSession = nil
+                pendingRequest = nil
+                continuation.yield(.completion(.skippedSilence(resolvedContext)))
+                continuation.yield(.session(session))
+                return
+            }
+
+            source = .audioFile(artifact.audioFileURL)
+        } else {
+            completionContext = request.recordingSessionContext
+            source = .recordingArtifact(
+                audioURL: artifact.audioFileURL,
+                frames: artifact.frameStream
+            )
+        }
+
         let engine = try selectedEngine(for: request)
         let options = constrainedOptions(request.options, for: engine)
-        let source = TranscriptionSource.recordingArtifact(
-            audioURL: artifact.audioFileURL,
-            frames: artifact.frameStream
-        )
 
         for try await event in engine.transcribeEvents(source: source, options: options) {
             let snapshot = await merger.apply(event)
@@ -135,7 +171,9 @@ final class TranscriptionCoordinator {
         session.stage = .completed
         session.endedAt = Date()
         activeSession = session
+        activeRecordingSession = nil
         pendingRequest = nil
+        continuation.yield(.completion(.transcribed(completionContext)))
         continuation.yield(.session(session))
     }
 
@@ -144,11 +182,21 @@ final class TranscriptionCoordinator {
         continuation: AsyncThrowingStream<TranscriptionSessionUpdate, Error>.Continuation
     ) {
         if var session = activeSession {
+            let failedContext = pendingRequest?.recordingSessionContext
             session.stage = .failed
             session.endedAt = Date()
             session.errorMessage = error.localizedDescription
             activeSession = session
+            activeRecordingSession = nil
             pendingRequest = nil
+            continuation.yield(
+                .completion(
+                    .failed(
+                        message: error.localizedDescription,
+                        context: failedContext
+                    )
+                )
+            )
             continuation.yield(.session(session))
         }
     }
@@ -158,9 +206,6 @@ final class TranscriptionCoordinator {
         case .remote:
             return remoteEngine
         case .local:
-            guard request.localModel == .appleOnDevice else {
-                throw TranscriptionCoordinatorError.unsupportedLocalModel(request.localModel)
-            }
             return localEngine
         }
     }

@@ -9,9 +9,15 @@ let package = Package(
   products: [
     .executable(name: "VerbatimSwiftMVP", targets: ["VerbatimSwiftMVP"]),
   ],
+  dependencies: [],
   targets: [
+    .binaryTarget(
+      name: "whisper",
+      path: "Vendor/whisper.xcframework"
+    ),
     .executableTarget(
       name: "VerbatimSwiftMVP",
+      dependencies: ["whisper"],
       path: "Sources",
       exclude: [
         "VerbatimSwiftMVP/Services/AppleLocalTranscriptionService 2.swift",

@@ -14,13 +14,17 @@ enum LocalTranscriptionError: LocalizedError {
     case onDeviceRecognitionUnavailable
     case recognitionFailed(Error)
     case noTranscriptionResult
+    case whisperRuntimeUnavailable(String)
+    case whisperModelNotInstalled(LocalTranscriptionModel)
+    case whisperTranscriptionFailed(String)
+    case unsupportedHardware(String)
 
     var errorDescription: String? {
         switch self {
         case .missingAudioFile:
             return "Recorded audio file is missing."
         case .unsupportedModel(let model):
-            return "\(model.title) is coming soon and is not available yet."
+            return "\(model.title) is not available for the current local backend."
         case .speechPermissionDenied:
             return "Speech recognition permission is denied. Enable it in System Settings > Privacy & Security."
         case .speechPermissionRestricted:
@@ -33,6 +37,14 @@ enum LocalTranscriptionError: LocalizedError {
             return "Local transcription failed: \(error.localizedDescription)"
         case .noTranscriptionResult:
             return "No text was returned from local transcription."
+        case .whisperRuntimeUnavailable(let message):
+            return "Whisper runtime is unavailable: \(message)"
+        case .whisperModelNotInstalled(let model):
+            return "\(model.title) is not installed yet. Download the model in Settings."
+        case .whisperTranscriptionFailed(let message):
+            return "Whisper transcription failed: \(message)"
+        case .unsupportedHardware(let message):
+            return message
         }
     }
 }
@@ -63,7 +75,7 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @
             throw LocalTranscriptionError.missingAudioFile
         }
 
-        guard model.isImplemented else {
+        guard model.backend == .appleSpeech else {
             throw LocalTranscriptionError.unsupportedModel(model)
         }
 

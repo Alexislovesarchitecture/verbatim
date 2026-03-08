@@ -4,11 +4,19 @@ import AppKit
 import SwiftUI
 #endif
 
+enum ListeningIndicatorOutcome: Sendable, Equatable {
+    case inserted
+    case copiedOnly(String)
+    case noSpeechDetected
+    case failed(String)
+}
+
 @MainActor
 protocol ListeningIndicatorServiceProtocol {
     func showListening()
     func showProcessing()
     func showCompletedBriefly()
+    func showOutcome(_ outcome: ListeningIndicatorOutcome)
     func hideListening()
 }
 
@@ -34,8 +42,27 @@ final class FloatingListeningIndicatorService: ListeningIndicatorServiceProtocol
 
     func showCompletedBriefly() {
 #if canImport(AppKit)
-        present(stage: .completed)
+        present(stage: .completed())
         scheduleHide(after: 0.55)
+#endif
+    }
+
+    func showOutcome(_ outcome: ListeningIndicatorOutcome) {
+#if canImport(AppKit)
+        switch outcome {
+        case .inserted:
+            present(stage: .completed(message: "Inserted."))
+            scheduleHide(after: 0.75)
+        case .copiedOnly(let message):
+            present(stage: .copiedOnly(message: message))
+            scheduleHide(after: 1.35)
+        case .noSpeechDetected:
+            present(stage: .noSpeechDetected(message: "No speech detected. Nothing sent."))
+            scheduleHide(after: 1.1)
+        case .failed(let message):
+            present(stage: .failed(message: message))
+            scheduleHide(after: 1.1)
+        }
 #endif
     }
 
@@ -105,7 +132,7 @@ final class FloatingListeningIndicatorService: ListeningIndicatorServiceProtocol
         }
 
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 204, height: 74),
+            contentRect: NSRect(x: 0, y: 0, width: 324, height: 94),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -143,7 +170,10 @@ private struct ListeningIndicatorBubble: View {
     enum Stage {
         case listening
         case processing
-        case completed
+        case completed(message: String = "Inserted.")
+        case copiedOnly(message: String)
+        case noSpeechDetected(message: String)
+        case failed(message: String)
 
         var iconName: String {
             switch self {
@@ -153,6 +183,12 @@ private struct ListeningIndicatorBubble: View {
                 return "paperplane.fill"
             case .completed:
                 return "checkmark"
+            case .copiedOnly:
+                return "doc.on.clipboard"
+            case .noSpeechDetected:
+                return "waveform.slash"
+            case .failed:
+                return "exclamationmark.triangle.fill"
             }
         }
 
@@ -164,11 +200,17 @@ private struct ListeningIndicatorBubble: View {
                 return Color(red: 0.58, green: 0.50, blue: 1.00)
             case .completed:
                 return Color(red: 0.32, green: 0.88, blue: 0.58)
+            case .copiedOnly:
+                return Color(red: 0.98, green: 0.78, blue: 0.30)
+            case .noSpeechDetected:
+                return Color(red: 0.86, green: 0.70, blue: 0.34)
+            case .failed:
+                return Color(red: 1.00, green: 0.43, blue: 0.38)
             }
         }
 
         var glow: Color {
-            accent.opacity(self == .completed ? 0.38 : 0.28)
+            accent.opacity(isCompletedStyle ? 0.38 : 0.28)
         }
 
         var glassTint: Color {
@@ -179,6 +221,12 @@ private struct ListeningIndicatorBubble: View {
                 return Color(red: 0.35, green: 0.28, blue: 0.74)
             case .completed:
                 return Color(red: 0.18, green: 0.42, blue: 0.32)
+            case .copiedOnly:
+                return Color(red: 0.56, green: 0.39, blue: 0.08)
+            case .noSpeechDetected:
+                return Color(red: 0.50, green: 0.36, blue: 0.10)
+            case .failed:
+                return Color(red: 0.55, green: 0.14, blue: 0.16)
             }
         }
 
@@ -202,7 +250,63 @@ private struct ListeningIndicatorBubble: View {
                     Color(red: 0.11, green: 0.20, blue: 0.18).opacity(0.90),
                     Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.94),
                 ]
+            case .copiedOnly:
+                return [
+                    Color.white.opacity(0.15),
+                    Color(red: 0.27, green: 0.20, blue: 0.06).opacity(0.92),
+                    Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.94),
+                ]
+            case .noSpeechDetected:
+                return [
+                    Color.white.opacity(0.13),
+                    Color(red: 0.22, green: 0.18, blue: 0.08).opacity(0.92),
+                    Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.94),
+                ]
+            case .failed:
+                return [
+                    Color.white.opacity(0.14),
+                    Color(red: 0.26, green: 0.10, blue: 0.12).opacity(0.92),
+                    Color(red: 0.05, green: 0.07, blue: 0.12).opacity(0.94),
+                ]
             }
+        }
+
+        var title: String {
+            switch self {
+            case .listening:
+                return "Listening"
+            case .processing:
+                return "Transcribing"
+            case .completed:
+                return "Inserted"
+            case .copiedOnly:
+                return "Clipboard Ready"
+            case .noSpeechDetected:
+                return "No Speech"
+            case .failed:
+                return "Recovery Needed"
+            }
+        }
+
+        var detail: String? {
+            switch self {
+            case .listening:
+                return nil
+            case .processing:
+                return nil
+            case .completed(let message),
+                 .copiedOnly(let message),
+                 .noSpeechDetected(let message),
+                 .failed(let message):
+                return message
+            }
+        }
+
+        var isCompletedStyle: Bool {
+            if case .completed = self {
+                return true
+            }
+            return false
         }
     }
 
@@ -211,11 +315,23 @@ private struct ListeningIndicatorBubble: View {
             HStack(spacing: 12) {
                 ListeningIndicatorSideMotion(stage: stage, reverse: false)
                 ListeningIndicatorOrb(stage: stage)
-                ListeningIndicatorSideMotion(stage: stage, reverse: true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(stage.title)
+                        .font(.system(size: 13, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.96))
+
+                    if let detail = stage.detail {
+                        Text(detail)
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.74))
+                            .lineLimit(2)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 12)
-            .frame(width: 182, height: 58)
+            .frame(width: 292, height: 72)
             .background(bubbleSurface)
             .padding(8)
         }
@@ -236,7 +352,7 @@ private struct ListeningIndicatorBubble: View {
                 )
                 .overlay(
                     shape
-                        .strokeBorder(.white.opacity(stage == .completed ? 0.22 : 0.16), lineWidth: 1)
+                        .strokeBorder(.white.opacity(stage.isCompletedStyle ? 0.22 : 0.16), lineWidth: 1)
                 )
                 .overlay(alignment: .bottom) {
                     Capsule(style: .continuous)
@@ -289,7 +405,7 @@ private struct ListeningIndicatorOrb: View {
                 .foregroundStyle(.white.opacity(0.96))
         }
         .frame(width: 34, height: 34)
-        .shadow(color: stage.glow, radius: stage == .completed ? 14 : 10, y: 0)
+        .shadow(color: stage.glow, radius: stage.isCompletedStyle ? 14 : 10, y: 0)
     }
 }
 
@@ -307,6 +423,8 @@ private struct ListeningIndicatorSideMotion: View {
                 pulsingDots
             case .completed:
                 completionGlow
+            case .copiedOnly, .noSpeechDetected, .failed:
+                pulsingDots
             }
         }
         .frame(width: 52, height: 24)

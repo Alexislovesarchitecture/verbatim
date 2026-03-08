@@ -26,6 +26,7 @@ final class ContextPackBuilderTests: XCTestCase {
             ),
             logicSettings: logicSettings,
             refineSettings: refine,
+            glossary: refine.glossary,
             deterministicText: "adu permit response"
         )
 

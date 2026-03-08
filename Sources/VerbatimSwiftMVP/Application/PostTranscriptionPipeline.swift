@@ -2,15 +2,19 @@ import Foundation
 
 struct PostTranscriptionPipelineRequest {
     let transcript: Transcript
+    let recordingSessionContext: RecordingSessionContext?
     let activeAppContextOverride: ActiveAppContext?
-    let insertionTarget: InsertionTarget?
+    let glossaryEntries: [GlossaryEntry]
     let promptProfiles: [PromptProfile]
+    let transcriptionMode: TranscriptionMode
     let logicMode: LogicMode
     let logicSettings: LogicSettings
     let refineSettings: RefineSettings
     let interactionSettings: InteractionSettings
     let autoFormatEnabled: Bool
     let canRunAutoFormat: Bool
+    let transcriptionEngineID: String
+    let transcriptionLatencyMs: Int?
     let effectiveAPIKey: String?
     let selectedRemoteLogicModelID: String
     let selectedLocalLogicModelID: String
@@ -20,6 +24,7 @@ struct PostTranscriptionPipelineRequest {
 struct ManualReformatRequest {
     let transcript: Transcript
     let activeAppContextOverride: ActiveAppContext?
+    let glossaryEntries: [GlossaryEntry]
     let profile: PromptProfile
     let logicMode: LogicMode
     let logicSettings: LogicSettings
@@ -36,6 +41,7 @@ struct PostTranscriptionPipelineResult {
     let latestLLMResult: LLMResult?
     let pendingActionItemsJSON: String?
     let pendingActionItemsRenderedText: String?
+    let insertionResult: InsertionResult?
     let lastErrorSummary: String?
 }
 
@@ -68,32 +74,42 @@ final class PostTranscriptionPipeline {
     }
 
     func processCompletedTranscript(_ request: PostTranscriptionPipelineRequest) async -> PostTranscriptionPipelineResult {
-        let activeAppContext = request.activeAppContextOverride ?? activeAppContextService.currentContext()
+        let activeAppContext = request.recordingSessionContext?.lockTargetAtStart == true
+            ? request.recordingSessionContext?.activeAppContext
+            ?? request.activeAppContextOverride
+            ?? activeAppContextService.currentContext()
+            : request.activeAppContextOverride
+            ?? activeAppContextService.currentContext()
+        let frozenStylePreset = request.recordingSessionContext?.stylePreset
         let resolvedTranscript = transcriptIntentResolver.resolve(
             transcript: request.transcript,
             selfCorrectionMode: request.logicSettings.selfCorrectionMode,
-            glossary: request.refineSettings.glossary,
+            glossary: request.glossaryEntries,
             activeContext: activeAppContext
         )
         let deterministic = deterministicFormatter.format(
             text: resolvedTranscript.text,
             settings: request.logicSettings,
-            glossary: request.refineSettings.glossary
+            glossary: request.glossaryEntries
         )
 
         let contextPack = contextPackBuilder.build(
             activeContext: activeAppContext,
             logicSettings: request.logicSettings,
             refineSettings: request.refineSettings,
+            glossary: request.glossaryEntries,
+            presetOverride: frozenStylePreset,
             deterministicText: deterministic.text
         )
 
         var llmResult: LLMResult?
+        var insertionResult: InsertionResult?
         var lastErrorSummary: String?
         var finalText = deterministic.text
         let selectedProfile = automaticProfile(
             for: activeAppContext.styleCategory,
             settings: request.refineSettings,
+            presetOverride: frozenStylePreset,
             from: request.promptProfiles
         )
 
@@ -118,14 +134,18 @@ final class PostTranscriptionPipeline {
         }
 
         if request.forceInsertion || !request.refineSettings.previewBeforeInsert {
-            do {
-                try insertionService.insert(
-                    text: finalText,
-                    autoPaste: request.interactionSettings.autoPasteAfterInsert,
-                    target: request.insertionTarget
-                )
-            } catch {
-                lastErrorSummary = error.localizedDescription
+            insertionResult = insertionService.insert(
+                text: finalText,
+                autoPaste: request.interactionSettings.insertionMode == .autoPasteWhenPossible
+                    && request.interactionSettings.autoPasteAfterInsert,
+                target: request.recordingSessionContext?.requiresFrozenInsertionTarget == true
+                    ? request.recordingSessionContext?.insertionTarget
+                    : nil,
+                requiresFrozenTarget: request.recordingSessionContext?.requiresFrozenInsertionTarget ?? false
+            )
+
+            if case .some(.failed(_)) = insertionResult {
+                lastErrorSummary = insertionResult?.userMessage
             }
         }
 
@@ -134,6 +154,7 @@ final class PostTranscriptionPipeline {
                 createdAt: Date(),
                 rawText: request.transcript.rawText,
                 deterministicText: deterministic.text,
+                finalText: finalText,
                 llmText: llmResult?.text,
                 llmJSON: llmResult?.json,
                 llmStatus: llmResult?.status,
@@ -146,9 +167,43 @@ final class PostTranscriptionPipeline {
                 latencyMs: llmResult?.latencyMs,
                 activeAppName: activeAppContext.appName,
                 bundleID: activeAppContext.bundleID,
-                styleCategory: activeAppContext.styleCategory
+                styleCategory: activeAppContext.styleCategory,
+                stylePreset: frozenStylePreset ?? request.refineSettings.preset(for: activeAppContext.styleCategory),
+                windowTitle: activeAppContext.windowTitle,
+                focusedElementRole: activeAppContext.focusedElementRole,
+                insertionOutcome: insertionResult?.persistedOutcome
             )
         )
+
+        if let sessionContext = request.recordingSessionContext {
+            transcriptRecordStore.appendDiagnosticSession(
+                DiagnosticSessionRecord(
+                    sessionID: sessionContext.sessionID,
+                    startedAt: sessionContext.startedAt,
+                    durationMs: max(Int(Date().timeIntervalSince(sessionContext.startedAt) * 1000), 0),
+                    triggerSource: sessionContext.triggerSource,
+                    triggerMode: sessionContext.triggerMode,
+                    transcriptionEngine: request.transcriptionEngineID,
+                    modelID: request.transcript.modelID,
+                    logicModelID: selectedLogicModelID(for: request.logicMode, request: request),
+                    reasoningEffort: request.logicSettings.reasoningEffort.rawValue,
+                    formattingProfile: selectedProfile?.id,
+                    transcriptionLatencyMs: request.transcriptionLatencyMs,
+                    llmLatencyMs: llmResult?.latencyMs,
+                    totalLatencyMs: max(Int(Date().timeIntervalSince(sessionContext.startedAt) * 1000), 0),
+                    tokensIn: llmResult?.tokens,
+                    cachedTokens: llmResult?.cachedTokens,
+                    insertionOutcome: insertionResult?.persistedOutcome,
+                    fallbackReason: insertionResult?.fallbackReason,
+                    targetApp: sessionContext.targetAppName,
+                    targetBundleID: sessionContext.targetBundleID,
+                    silencePeak: sessionContext.audioActivitySummary?.peakLevel,
+                    silenceAverageRMS: sessionContext.audioActivitySummary?.averagePower,
+                    silenceVoicedRatio: sessionContext.audioActivitySummary?.voicedRatio,
+                    skippedForSilence: false
+                )
+            )
+        }
 
         return PostTranscriptionPipelineResult(
             deterministicResult: deterministic,
@@ -160,6 +215,7 @@ final class PostTranscriptionPipeline {
             latestLLMResult: llmResult,
             pendingActionItemsJSON: nil,
             pendingActionItemsRenderedText: nil,
+            insertionResult: insertionResult,
             lastErrorSummary: lastErrorSummary
         )
     }
@@ -169,19 +225,20 @@ final class PostTranscriptionPipeline {
         let resolvedTranscript = transcriptIntentResolver.resolve(
             transcript: request.transcript,
             selfCorrectionMode: request.logicSettings.selfCorrectionMode,
-            glossary: request.refineSettings.glossary,
+            glossary: request.glossaryEntries,
             activeContext: activeAppContext
         )
         let deterministic = deterministicFormatter.format(
             text: resolvedTranscript.text,
             settings: request.logicSettings,
-            glossary: request.refineSettings.glossary
+            glossary: request.glossaryEntries
         )
 
         let contextPack = contextPackBuilder.build(
             activeContext: activeAppContext,
             logicSettings: request.logicSettings,
             refineSettings: request.refineSettings,
+            glossary: request.glossaryEntries,
             deterministicText: deterministic.text
         )
 
@@ -200,6 +257,7 @@ final class PostTranscriptionPipeline {
                     createdAt: Date(),
                     rawText: request.transcript.rawText,
                     deterministicText: deterministic.text,
+                    finalText: renderedText(from: result, fallback: deterministic.text),
                     llmText: result.text,
                     llmJSON: result.json,
                     llmStatus: result.status,
@@ -212,7 +270,11 @@ final class PostTranscriptionPipeline {
                     latencyMs: result.latencyMs,
                     activeAppName: activeAppContext.appName,
                     bundleID: activeAppContext.bundleID,
-                    styleCategory: activeAppContext.styleCategory
+                    styleCategory: activeAppContext.styleCategory,
+                    stylePreset: request.refineSettings.preset(for: activeAppContext.styleCategory),
+                    windowTitle: activeAppContext.windowTitle,
+                    focusedElementRole: activeAppContext.focusedElementRole,
+                    insertionOutcome: nil
                 )
             )
 
@@ -223,16 +285,19 @@ final class PostTranscriptionPipeline {
                     latestLLMResult: result,
                     pendingActionItemsJSON: json,
                     pendingActionItemsRenderedText: renderedActionItemsText(from: json),
+                    insertionResult: nil,
                     lastErrorSummary: nil
                 )
             }
 
             let text = renderedText(from: result, fallback: deterministic.text)
             if !request.refineSettings.previewBeforeInsert {
-                try? insertionService.insert(
+                _ = insertionService.insert(
                     text: text,
-                    autoPaste: request.interactionSettings.autoPasteAfterInsert,
-                    target: nil
+                    autoPaste: request.interactionSettings.insertionMode == .autoPasteWhenPossible
+                        && request.interactionSettings.autoPasteAfterInsert,
+                    target: nil,
+                    requiresFrozenTarget: false
                 )
             }
 
@@ -246,6 +311,7 @@ final class PostTranscriptionPipeline {
                 latestLLMResult: result,
                 pendingActionItemsJSON: nil,
                 pendingActionItemsRenderedText: nil,
+                insertionResult: nil,
                 lastErrorSummary: nil
             )
         } catch {
@@ -259,6 +325,7 @@ final class PostTranscriptionPipeline {
                 latestLLMResult: nil,
                 pendingActionItemsJSON: nil,
                 pendingActionItemsRenderedText: nil,
+                insertionResult: nil,
                 lastErrorSummary: error.localizedDescription
             )
         }
@@ -267,9 +334,14 @@ final class PostTranscriptionPipeline {
     private func automaticProfile(
         for styleCategory: StyleCategory,
         settings: RefineSettings,
+        presetOverride: StylePreset? = nil,
         from profiles: [PromptProfile]
     ) -> PromptProfile? {
-        let autoProfile = PromptProfile.automaticStyleProfile(for: styleCategory, settings: settings)
+        let autoProfile = PromptProfile.automaticStyleProfile(
+            for: styleCategory,
+            presetOverride: presetOverride,
+            settings: settings
+        )
         if autoProfile.instructionPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return profiles.first(where: { $0.id == "cleanup" && $0.enabled })
                 ?? profiles.first(where: { $0.enabled })

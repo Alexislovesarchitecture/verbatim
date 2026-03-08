@@ -1,4 +1,5 @@
 import XCTest
+import SQLite3
 @testable import VerbatimSwiftMVP
 
 final class TranscriptRecordStoreTests: XCTestCase {
@@ -71,6 +72,7 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 createdAt: Date(timeIntervalSince1970: 100),
                 rawText: "first raw",
                 deterministicText: "first clean",
+                finalText: "first clean",
                 llmText: nil,
                 llmJSON: nil,
                 llmStatus: nil,
@@ -83,7 +85,11 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 latencyMs: nil,
                 activeAppName: "Mail",
                 bundleID: "com.apple.mail",
-                styleCategory: .email
+                styleCategory: .email,
+                stylePreset: nil,
+                windowTitle: nil,
+                focusedElementRole: nil,
+                insertionOutcome: nil
             )
         )
 
@@ -92,6 +98,7 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 createdAt: Date(timeIntervalSince1970: 200),
                 rawText: "second raw",
                 deterministicText: "second clean",
+                finalText: "second formatted",
                 llmText: "second formatted",
                 llmJSON: nil,
                 llmStatus: .success,
@@ -104,7 +111,11 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 latencyMs: 32,
                 activeAppName: "Messages",
                 bundleID: "com.apple.MobileSMS",
-                styleCategory: .personal
+                styleCategory: .personal,
+                stylePreset: nil,
+                windowTitle: nil,
+                focusedElementRole: nil,
+                insertionOutcome: .inserted
             )
         )
 
@@ -114,5 +125,213 @@ final class TranscriptRecordStoreTests: XCTestCase {
         XCTAssertEqual(records.first?.rawText, "second raw")
         XCTAssertEqual(records.first?.llmText, "second formatted")
         XCTAssertEqual(records.last?.rawText, "first raw")
+    }
+
+    func testDatabaseEnablesWALAndSchemaVersion() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-\(UUID().uuidString)", isDirectory: true)
+        let databaseURL = tempRoot.appendingPathComponent("transcript_history.sqlite")
+        _ = TranscriptRecordStore(baseDirectoryURL: tempRoot)
+
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        XCTAssertEqual(stringPragma("journal_mode", db: db), "wal")
+        XCTAssertEqual(intPragma("user_version", db: db), 4)
+    }
+
+    func testLegacyTranscriptTableMigratesIntoTranscriptions() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+        let databaseURL = tempRoot.appendingPathComponent("transcript_history.sqlite")
+
+        var legacyDB: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(databaseURL.path, &legacyDB), SQLITE_OK)
+        defer { sqlite3_close(legacyDB) }
+
+        XCTAssertEqual(sqlite3_exec(legacyDB, """
+        CREATE TABLE transcript_records (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at REAL NOT NULL,
+            raw_text TEXT NOT NULL,
+            deterministic_text TEXT NOT NULL,
+            llm_text TEXT,
+            llm_json TEXT,
+            llm_status TEXT,
+            validation_status TEXT,
+            profile_id TEXT,
+            profile_version INTEGER,
+            model_id TEXT,
+            tokens INTEGER,
+            cached_tokens INTEGER,
+            latency_ms INTEGER,
+            active_app_name TEXT NOT NULL,
+            bundle_id TEXT NOT NULL,
+            style_category TEXT NOT NULL
+        );
+        INSERT INTO transcript_records (
+            created_at, raw_text, deterministic_text, llm_text, llm_json, llm_status, validation_status,
+            profile_id, profile_version, model_id, tokens, cached_tokens, latency_ms,
+            active_app_name, bundle_id, style_category
+        ) VALUES (
+            200, 'legacy raw', 'legacy clean', 'legacy final', NULL, 'success', 'not_applicable',
+            'cleanup', 1, 'gpt-5-mini', 12, 0, 45, 'Mail', 'com.apple.mail', 'email'
+        );
+        """, nil, nil, nil), SQLITE_OK)
+
+        let sut = TranscriptRecordStore(baseDirectoryURL: tempRoot)
+        let records = sut.fetchRecentRecords(limit: 10)
+
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.rawText, "legacy raw")
+        XCTAssertEqual(records.first?.finalText, "legacy final")
+        XCTAssertEqual(records.first?.styleCategory, .email)
+    }
+
+    func testDictionaryRoundTripUsesDedicatedTable() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-\(UUID().uuidString)", isDirectory: true)
+        let sut = TranscriptRecordStore(baseDirectoryURL: tempRoot)
+
+        sut.replaceDictionaryEntries([
+            GlossaryEntry(from: "adu", to: "ADU"),
+            GlossaryEntry(from: "site scape", to: "Sitescape"),
+        ])
+        sut.upsertDictionaryEntry(from: "adu", to: "ADU Permit", note: "preferred expansion")
+
+        let entries = sut.fetchDictionaryEntries()
+
+        XCTAssertEqual(entries.count, 2)
+        XCTAssertEqual(entries.first?.from, "adu")
+        XCTAssertEqual(entries.first?.to, "ADU Permit")
+    }
+
+    func testWorkspaceTablesSupportBasicSaveAndFetch() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-\(UUID().uuidString)", isDirectory: true)
+        let sut = TranscriptRecordStore(baseDirectoryURL: tempRoot)
+
+        let folderID = sut.upsertFolder(id: nil, name: "Client Follow Up", archived: false)
+        let noteID = sut.saveNote(
+            id: nil,
+            folderID: folderID,
+            transcriptionID: nil,
+            title: "Call summary",
+            body: "Need revised permit notes.",
+            archived: false
+        )
+        let actionID = sut.saveAction(
+            id: nil,
+            folderID: folderID,
+            noteID: noteID,
+            transcriptionID: nil,
+            title: "Draft permit response",
+            status: .open,
+            dueAt: nil,
+            archived: false
+        )
+
+        XCTAssertNotNil(folderID)
+        XCTAssertNotNil(noteID)
+        XCTAssertNotNil(actionID)
+        XCTAssertEqual(sut.fetchFolders().first?.name, "Client Follow Up")
+        XCTAssertEqual(sut.fetchNotes(limit: 10).first?.title, "Call summary")
+        XCTAssertEqual(sut.fetchActions(limit: 10).first?.title, "Draft permit response")
+    }
+
+    func testDiagnosticSessionsRoundTripAndSummary() {
+        let tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("verbatim-tests-\(UUID().uuidString)", isDirectory: true)
+        let sut = TranscriptRecordStore(baseDirectoryURL: tempRoot)
+
+        sut.appendDiagnosticSession(
+            DiagnosticSessionRecord(
+                sessionID: UUID(),
+                startedAt: Date(timeIntervalSince1970: 100),
+                durationMs: 500,
+                triggerSource: .hotkey,
+                triggerMode: .holdToTalk,
+                transcriptionEngine: "remote",
+                modelID: "gpt-4o-mini-transcribe",
+                logicModelID: "gpt-5-mini",
+                reasoningEffort: "medium",
+                formattingProfile: "cleanup",
+                transcriptionLatencyMs: 120,
+                llmLatencyMs: 80,
+                totalLatencyMs: 240,
+                tokensIn: 20,
+                cachedTokens: 10,
+                insertionOutcome: .copiedOnlyNeedsPermission,
+                fallbackReason: .accessibilityPermissionRequired,
+                targetApp: "Messages",
+                targetBundleID: "com.apple.MobileSMS",
+                silencePeak: 0.02,
+                silenceAverageRMS: 0.01,
+                silenceVoicedRatio: 0.12,
+                skippedForSilence: false
+            )
+        )
+        sut.appendDiagnosticSession(
+            DiagnosticSessionRecord(
+                sessionID: UUID(),
+                startedAt: Date(timeIntervalSince1970: 200),
+                durationMs: 300,
+                triggerSource: .hotkey,
+                triggerMode: .holdToTalk,
+                transcriptionEngine: "remote",
+                modelID: "gpt-4o-mini-transcribe",
+                logicModelID: "gpt-5-mini",
+                reasoningEffort: "medium",
+                formattingProfile: nil,
+                transcriptionLatencyMs: nil,
+                llmLatencyMs: nil,
+                totalLatencyMs: 300,
+                tokensIn: nil,
+                cachedTokens: nil,
+                insertionOutcome: nil,
+                fallbackReason: nil,
+                targetApp: "Messages",
+                targetBundleID: "com.apple.MobileSMS",
+                silencePeak: 0.0,
+                silenceAverageRMS: 0.0,
+                silenceVoicedRatio: 0.0,
+                skippedForSilence: true
+            )
+        )
+
+        let sessions = sut.fetchRecentDiagnosticSessions(limit: 10)
+        let summary = sut.fetchDiagnosticSessionSummary(limit: 10)
+
+        XCTAssertEqual(sessions.count, 2)
+        XCTAssertTrue(sessions.first?.skippedForSilence ?? false)
+        XCTAssertEqual(sessions.last?.logicModelID, "gpt-5-mini")
+        XCTAssertEqual(sessions.last?.reasoningEffort, "medium")
+        XCTAssertEqual(summary.averageTotalLatencyMs, 270)
+        XCTAssertEqual(summary.permissionFallbackCount, 1)
+        XCTAssertEqual(summary.silenceSkipRate, 0.5, accuracy: 0.001)
+    }
+
+    private func stringPragma(_ name: String, db: OpaquePointer?) -> String? {
+        let sql = "PRAGMA \(name);"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return nil
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW,
+              let text = sqlite3_column_text(statement, 0) else {
+            return nil
+        }
+        return String(cString: text)
+    }
+
+    private func intPragma(_ name: String, db: OpaquePointer?) -> Int {
+        let sql = "PRAGMA \(name);"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            return 0
+        }
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_step(statement) == SQLITE_ROW else {
+            return 0
+        }
+        return Int(sqlite3_column_int(statement, 0))
     }
 }

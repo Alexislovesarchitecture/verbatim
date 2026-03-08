@@ -10,9 +10,17 @@ final class InteractionSettingsTests: XCTestCase {
         XCTAssertEqual(settings.hotkeyBinding.modifierFlagsRawValue, 0)
         XCTAssertEqual(settings.hotkeyBinding.modifierKeyRawValue, HotkeyBinding.functionModifierRawValue)
         XCTAssertEqual(settings.hotkeyBinding.displayTitle, "Fn")
+        XCTAssertEqual(settings.functionKeyFallbackMode, .automatic)
         XCTAssertTrue(settings.showListeningIndicator)
         XCTAssertFalse(settings.playSoundCues)
         XCTAssertTrue(settings.autoPasteAfterInsert)
+        XCTAssertTrue(settings.silenceDetectionEnabled)
+        XCTAssertEqual(settings.silenceSensitivity, .normal)
+        XCTAssertFalse(settings.alwaysTranscribeShortRecordings)
+        XCTAssertTrue(settings.lockTargetAtStart)
+        XCTAssertEqual(settings.insertionMode, .autoPasteWhenPossible)
+        XCTAssertTrue(settings.showPermissionWarnings)
+        XCTAssertEqual(settings.clipboardRestoreMode, .manualOnly)
     }
 
     func testLegacyPresetDecodesToCustomBinding() throws {
@@ -34,6 +42,9 @@ final class InteractionSettingsTests: XCTestCase {
         XCTAssertEqual(decoded.hotkeyBinding.modifierFlagsRawValue, HotkeyBinding.controlModifierRawValue)
         XCTAssertNil(decoded.hotkeyBinding.modifierKeyRawValue)
         XCTAssertEqual(decoded.hotkeyBinding.displayTitle, "Control + Space")
+        XCTAssertEqual(decoded.functionKeyFallbackMode, .automatic)
         XCTAssertFalse(decoded.autoPasteAfterInsert)
+        XCTAssertTrue(decoded.silenceDetectionEnabled)
+        XCTAssertEqual(decoded.insertionMode, .autoPasteWhenPossible)
     }
 }

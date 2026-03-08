@@ -29,6 +29,13 @@ enum LocalLogicRuntimeLoadState: Equatable {
     case error(String)
 }
 
+enum WhisperRuntimeLoadState: Equatable {
+    case idle
+    case checking
+    case ready
+    case error(String)
+}
+
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
     case auto
     case light
@@ -59,6 +66,24 @@ enum AppAppearanceMode: String, CaseIterable, Identifiable {
     }
 }
 
+enum HotkeyStatusState: Equatable {
+    case inactive
+    case active(bindingTitle: String, message: String)
+    case fallback(original: String, effective: String, message: String)
+    case failed(message: String)
+}
+
+struct HotkeyRuntimeLog: Identifiable, Equatable {
+    let id = UUID()
+    let timestamp: Date
+    let selectedBindingTitle: String
+    let effectiveBindingTitle: String
+    let backend: HotkeyBackend
+    let fallbackWasUsed: Bool
+    let permissionGranted: Bool
+    let event: GlobalHotkeyEvent?
+}
+
 @MainActor
 final class TranscriptionViewModel: ObservableObject {
     @Published private(set) var state: RecorderState = .idle
@@ -68,6 +93,7 @@ final class TranscriptionViewModel: ObservableObject {
     @Published private(set) var latestLLMResult: LLMResult? = nil
     @Published private(set) var promptProfiles: [PromptProfile] = []
     @Published private(set) var transcriptHistory: [TranscriptRecord] = []
+    @Published private(set) var dictionaryEntries: [GlossaryEntry] = []
     @Published var selectedTranscriptViewMode: TranscriptViewMode = .raw
     @Published var apiKey: String = ""
     @Published var refineSettings: RefineSettings = RefineSettings() {
@@ -87,7 +113,19 @@ final class TranscriptionViewModel: ObservableObject {
     @Published var pendingActionItemsRenderedText: String?
     @Published private(set) var hotkeyPermissionGranted: Bool = true
     @Published private(set) var hotkeyStatusMessage: String = "Hotkey monitoring is off."
+    @Published private(set) var hotkeyStatusState: HotkeyStatusState = .inactive
     @Published private(set) var isCapturingHotkey: Bool = false
+    @Published private(set) var effectiveHotkeyBindingTitle: String = HotkeyBinding.defaultFunctionKey.displayTitle
+    @Published private(set) var recommendedHotkeyFallbackTitle: String?
+    @Published private(set) var hotkeyRuntimeLogs: [HotkeyRuntimeLog] = []
+    @Published private(set) var hotkeyTestMessage: String?
+    @Published private(set) var diagnosticSessions: [DiagnosticSessionRecord] = []
+    @Published private(set) var diagnosticSessionSummary: DiagnosticSessionSummary = .empty
+    @Published var diagnosticsSessionLimit: DiagnosticsSessionLimit = .last20 {
+        didSet {
+            reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
+        }
+    }
 
     @Published var selectedSection: AppSection = .home {
         didSet {
@@ -108,6 +146,9 @@ final class TranscriptionViewModel: ObservableObject {
     @Published var selectedLocalModel: LocalTranscriptionModel = .appleOnDevice {
         didSet {
             UserDefaults.standard.set(selectedLocalModel.rawValue, forKey: Self.savedLocalModelDefaultsKey)
+            if selectedLocalModel.backend == .whisperCpp {
+                refreshWhisperRuntime()
+            }
         }
     }
 
@@ -169,6 +210,13 @@ final class TranscriptionViewModel: ObservableObject {
 
     @Published var remoteModelsLoadState: RemoteModelsLoadState = .idle
     @Published private(set) var remoteTranscriptionModels: [ModelAvailabilityRow] = []
+    @Published private(set) var whisperRuntimeLoadState: WhisperRuntimeLoadState = .idle
+    @Published private(set) var whisperRuntimeStatus: WhisperRuntimeStatus = WhisperRuntimeStatus(
+        isSupported: false,
+        systemInfo: nil,
+        message: "Local Whisper not checked yet."
+    )
+    @Published private(set) var whisperModelInstallStates: [LocalTranscriptionModel: WhisperModelInstallState] = [:]
     @Published private(set) var remoteLogicModels: [ModelAvailabilityRow] = []
     @Published private(set) var localLogicModels: [ModelAvailabilityRow] = []
     @Published private(set) var localLogicRuntimeLoadState: LocalLogicRuntimeLoadState = .idle
@@ -211,6 +259,8 @@ final class TranscriptionViewModel: ObservableObject {
     }
 
     @Published var lastErrorSummary: String?
+    @Published private(set) var lastSessionCompletionResult: RecordingCompletionResult?
+    @Published private(set) var lastInsertionResult: InsertionResult?
 
     @Published private(set) var availableModelIDs: Set<String> = []
 
@@ -220,6 +270,7 @@ final class TranscriptionViewModel: ObservableObject {
     private let transcriptRecordStore: TranscriptRecordStoreProtocol
     private let postTranscriptionPipeline: PostTranscriptionPipeline
     private let activeAppContextService: ActiveAppContextServiceProtocol
+    private let whisperModelManager: WhisperModelManager
     private let insertionService: InsertionServiceProtocol
     private let globalHotkeyService: GlobalHotkeyServiceProtocol
     private let listeningIndicatorService: ListeningIndicatorServiceProtocol
@@ -230,8 +281,10 @@ final class TranscriptionViewModel: ObservableObject {
     private var pendingDoubleTapDate: Date?
     private var hasRequestedAccessibilityPrompt = false
     private var shouldForceInsertionForCurrentRecording = false
-    private var recordingAppContextOverride: ActiveAppContext?
-    private var insertionTargetForCurrentRecording: InsertionTarget?
+    private var activeRecordingSessionContext: RecordingSessionContext?
+    private var activeHotkeyStartResult: HotkeyStartResult?
+    private var hotkeyTestTask: Task<Void, Never>?
+    private var isRunningHotkeyTest = false
 #if canImport(AppKit)
     private var hotkeyCaptureLocalMonitor: Any?
 #endif
@@ -265,7 +318,8 @@ final class TranscriptionViewModel: ObservableObject {
 
     init(
         transcriptionService: TranscriptionServiceProtocol = OpenAITranscriptionService(),
-        localTranscriptionService: LocalTranscriptionServiceProtocol = AppleLocalTranscriptionService(),
+        localTranscriptionService: LocalTranscriptionServiceProtocol? = nil,
+        whisperModelManager: WhisperModelManager? = nil,
         logicService: OpenAILogicService = OpenAILogicService(),
         localLogicService: OllamaLocalLogicService = OllamaLocalLogicService(),
         modelCatalogService: ModelCatalogServiceProtocol? = nil,
@@ -282,6 +336,11 @@ final class TranscriptionViewModel: ObservableObject {
         listeningIndicatorService: ListeningIndicatorServiceProtocol? = nil,
         soundCueService: SoundCueServiceProtocol = SoundCueService()
     ) {
+        let resolvedWhisperModelManager = whisperModelManager ?? WhisperModelManager()
+        let resolvedLocalTranscriptionService = localTranscriptionService
+            ?? ManagedLocalTranscriptionService(
+                whisperService: WhisperLocalTranscriptionService(modelManager: resolvedWhisperModelManager)
+            )
         let formatterRouter = LLMFormatterRouter(
             remoteService: logicService,
             localService: localLogicService,
@@ -293,13 +352,14 @@ final class TranscriptionViewModel: ObservableObject {
         self.transcriptionCoordinator = transcriptionCoordinator
             ?? TranscriptionCoordinator(
                 remoteEngine: transcriptionService,
-                localEngine: localTranscriptionService,
+                localEngine: resolvedLocalTranscriptionService,
                 modelCatalogService: resolvedModelCatalogService
             )
         self.localLogicService = localLogicService
         self.promptProfileStore = promptProfileStore
         self.transcriptRecordStore = transcriptRecordStore
         self.activeAppContextService = activeAppContextService
+        self.whisperModelManager = resolvedWhisperModelManager
         self.postTranscriptionPipeline = postTranscriptionPipeline
             ?? PostTranscriptionPipeline(
                 transcriptIntentResolver: transcriptIntentResolver,
@@ -317,7 +377,10 @@ final class TranscriptionViewModel: ObservableObject {
 
         apiKey = UserDefaults.standard.string(forKey: Self.savedApiKeyDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         applySavedState()
+        migrateLegacyGlossaryIfNeeded()
+        reloadDictionaryEntries()
         reloadTranscriptHistory()
+        reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
         rebuildModelRows()
         applyTranscriptionModelSelectionDefaults()
         applyLogicModeDefaults()
@@ -328,6 +391,7 @@ final class TranscriptionViewModel: ObservableObject {
         if logicMode == .local {
             checkLocalLogicRuntime()
         }
+        refreshWhisperRuntime()
         configureHotkeyMonitoring()
 
         Task { [weak self] in
@@ -353,6 +417,9 @@ final class TranscriptionViewModel: ObservableObject {
         case .formatting:
             return "Formatting transcript..."
         case .done:
+            if let sessionOutcomeStatusMessage {
+                return sessionOutcomeStatusMessage
+            }
             if let summary = lastErrorSummary, !summary.isEmpty {
                 return "Raw transcript ready. Formatting warning: \(summary)"
             }
@@ -360,6 +427,18 @@ final class TranscriptionViewModel: ObservableObject {
         case .error(let message):
             return "Error: \(message)"
         }
+    }
+
+    var accessibilityPermissionStateDescription: String {
+        hotkeyPermissionGranted ? "Accessibility access is enabled." : "Accessibility access is not enabled."
+    }
+
+    var accessibilityPermissionHelpText: String {
+        "Global hotkeys and auto-paste need Accessibility permission. Fn / Globe may still require a fallback shortcut for reliable use outside the app."
+    }
+
+    var shouldShowPermissionWarning: Bool {
+        interactionSettings.showPermissionWarnings && !hotkeyPermissionGranted
     }
 
     var primaryButtonTitle: String {
@@ -388,12 +467,30 @@ final class TranscriptionViewModel: ObservableObject {
         interactionSettings.hotkeyBinding.displayTitle
     }
 
+    var canUseRecommendedHotkeyFallback: Bool {
+        interactionSettings.hotkeyBinding.isFunctionOnlyBinding
+            && (activeHotkeyStartResult?.recommendedFallback != nil || HotkeyBinding.recommendedFallbacks.first != nil)
+    }
+
+    var hasEffectiveHotkeyOverride: Bool {
+        effectiveHotkeyBindingTitle != hotkeyBindingTitle
+    }
+
+    var hotkeyValidationResult: HotkeyValidationResult {
+        interactionSettings.hotkeyBinding.validationResult
+    }
+
     var canStartForCurrentMode: Bool {
         switch transcriptionMode {
         case .remote:
             return effectiveApiKey != nil && selectedTranscriptionModel != nil && isSelectedRemoteModelAvailable
         case .local:
-            return selectedLocalModel.isImplemented
+            switch selectedLocalModel.backend {
+            case .appleSpeech:
+                return true
+            case .whisperCpp:
+                return whisperRuntimeStatus.isAvailable && localWhisperInstallState(for: selectedLocalModel).isInstalled
+            }
         }
     }
 
@@ -519,6 +616,88 @@ final class TranscriptionViewModel: ObservableObject {
         }
     }
 
+    var localTranscriptionRuntimeStatusMessage: String {
+        switch selectedLocalModel.backend {
+        case .appleSpeech:
+            return "Apple Speech is built into macOS."
+        case .whisperCpp:
+            switch whisperRuntimeLoadState {
+            case .idle:
+                return whisperRuntimeStatus.message
+            case .checking:
+                return "Checking Whisper runtime..."
+            case .ready:
+                return whisperRuntimeStatus.message
+            case .error(let message):
+                return message
+            }
+        }
+    }
+
+    var isLocalTranscriptionRuntimeStatusError: Bool {
+        switch selectedLocalModel.backend {
+        case .appleSpeech:
+            return false
+        case .whisperCpp:
+            if case .error = whisperRuntimeLoadState {
+                return true
+            }
+            return !whisperRuntimeStatus.isAvailable
+        }
+    }
+
+    var selectedLocalModelPrimaryActionTitle: String? {
+        guard selectedLocalModel.backend == .whisperCpp else { return nil }
+
+        switch localWhisperInstallState(for: selectedLocalModel) {
+        case .notInstalled:
+            return "Download model"
+        case .downloading:
+            return nil
+        case .installed:
+            return nil
+        case .failed:
+            return "Retry download"
+        }
+    }
+
+    var canDownloadSelectedLocalWhisperModel: Bool {
+        guard selectedLocalModel.backend == .whisperCpp else { return false }
+        guard whisperRuntimeStatus.isAvailable else { return false }
+
+        switch localWhisperInstallState(for: selectedLocalModel) {
+        case .notInstalled, .failed:
+            return true
+        case .downloading, .installed:
+            return false
+        }
+    }
+
+    var canRemoveSelectedLocalWhisperModel: Bool {
+        guard selectedLocalModel.backend == .whisperCpp else { return false }
+        return localWhisperInstallState(for: selectedLocalModel).isInstalled
+    }
+
+    var selectedLocalModelSecondaryNote: String {
+        switch selectedLocalModel.backend {
+        case .appleSpeech:
+            return "No download required."
+        case .whisperCpp:
+            if selectedLocalModel.recommendedForFirstDownload {
+                return "Recommended first Whisper download."
+            }
+            return selectedLocalModel.detail
+        }
+    }
+
+    var whisperRuntimeSystemInfoSummary: String? {
+        guard let systemInfo = whisperRuntimeStatus.systemInfo,
+              !systemInfo.isEmpty else {
+            return nil
+        }
+        return systemInfo
+    }
+
     var isLocalLogicRuntimeStatusError: Bool {
         if case .error = localLogicRuntimeLoadState {
             return true
@@ -587,6 +766,9 @@ final class TranscriptionViewModel: ObservableObject {
 
     func selectLocalModel(_ model: LocalTranscriptionModel) {
         selectedLocalModel = model
+        if model.backend == .whisperCpp {
+            refreshWhisperRuntime()
+        }
     }
 
     func selectRemoteLogicModel(_ id: String) {
@@ -630,6 +812,61 @@ final class TranscriptionViewModel: ObservableObject {
         }
     }
 
+    func refreshWhisperRuntime() {
+        whisperRuntimeLoadState = .checking
+        Task { [weak self] in
+            guard let self else { return }
+            let runtime = await whisperModelManager.runtimeStatus()
+            let states = await whisperModelManager.refreshInstallStates()
+            guard !Task.isCancelled else { return }
+            whisperRuntimeStatus = runtime
+            whisperModelInstallStates = states
+            whisperRuntimeLoadState = runtime.isAvailable ? .ready : .error(runtime.message)
+        }
+    }
+
+    func downloadSelectedLocalWhisperModel() {
+        guard selectedLocalModel.backend == .whisperCpp else { return }
+        let model = selectedLocalModel
+        whisperModelInstallStates[model] = .downloading(progress: nil)
+        whisperRuntimeLoadState = .checking
+
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await whisperModelManager.downloadModel(model)
+            let runtime = await whisperModelManager.runtimeStatus()
+            let states = await whisperModelManager.refreshInstallStates()
+            guard !Task.isCancelled else { return }
+            whisperRuntimeStatus = runtime
+            whisperModelInstallStates = states.merging([model: state]) { _, new in new }
+            switch state {
+            case .failed(let message):
+                whisperRuntimeLoadState = .error(message)
+            default:
+                whisperRuntimeLoadState = runtime.isAvailable ? .ready : .error(runtime.message)
+            }
+        }
+    }
+
+    func removeSelectedLocalWhisperModel() {
+        guard selectedLocalModel.backend == .whisperCpp else { return }
+        let model = selectedLocalModel
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await whisperModelManager.removeModel(model)
+                let states = await whisperModelManager.refreshInstallStates()
+                guard !Task.isCancelled else { return }
+                whisperModelInstallStates = states
+                whisperRuntimeLoadState = whisperRuntimeStatus.isAvailable ? .ready : .error(whisperRuntimeStatus.message)
+            } catch {
+                guard !Task.isCancelled else { return }
+                whisperModelInstallStates[model] = .failed(message: error.localizedDescription)
+                whisperRuntimeLoadState = .error(error.localizedDescription)
+            }
+        }
+    }
+
     func start(fromHotkey: Bool = false) {
         guard canStartForCurrentMode else {
             state = .error(blockedStartMessage)
@@ -641,17 +878,20 @@ final class TranscriptionViewModel: ObservableObject {
         }
 
         shouldForceInsertionForCurrentRecording = fromHotkey
-        if fromHotkey {
-            let activeContext = activeAppContextService.currentContext()
-            recordingAppContextOverride = activeContext
-            insertionTargetForCurrentRecording = activeContext.insertionTarget
-        } else {
-            recordingAppContextOverride = nil
-            insertionTargetForCurrentRecording = nil
-        }
+        let activeContext = activeAppContextService.currentContext()
+        activeRecordingSessionContext = RecordingSessionContext(
+            activeAppContext: activeContext,
+            insertionTarget: activeContext.insertionTarget,
+            stylePreset: refineSettings.preset(for: activeContext.styleCategory),
+            triggerSource: fromHotkey ? .hotkey : .manual,
+            triggerMode: fromHotkey ? interactionSettings.hotkeyTriggerMode : nil,
+            lockTargetAtStart: fromHotkey ? interactionSettings.lockTargetAtStart : false
+        )
 
         Task {
             do {
+                lastSessionCompletionResult = nil
+                lastInsertionResult = nil
                 guard let request = makeTranscriptionSessionRequest() else {
                     state = .error(blockedStartMessage)
                     return
@@ -680,11 +920,9 @@ final class TranscriptionViewModel: ObservableObject {
         hotkeyIsPressed = false
         pendingDoubleTapDate = nil
         let shouldInsertOnStop = shouldForceInsertionForCurrentRecording
-        let activeAppContextOverride = recordingAppContextOverride
-        let insertionTarget = insertionTargetForCurrentRecording
+        let recordingSessionContext = activeRecordingSessionContext
         shouldForceInsertionForCurrentRecording = false
-        recordingAppContextOverride = nil
-        insertionTargetForCurrentRecording = nil
+        activeRecordingSessionContext = nil
         if interactionSettings.showListeningIndicator {
             listeningIndicatorService.showProcessing()
         } else {
@@ -700,6 +938,9 @@ final class TranscriptionViewModel: ObservableObject {
             latestLLMResult = nil
             pendingActionItemsJSON = nil
             pendingActionItemsRenderedText = nil
+            lastSessionCompletionResult = nil
+            lastInsertionResult = nil
+            let transcriptionStartedAt = Date()
 
             do {
                 transcript = nil
@@ -711,12 +952,53 @@ final class TranscriptionViewModel: ObservableObject {
                     switch update {
                     case .session:
                         break
+                    case .completion(let completion):
+                        lastSessionCompletionResult = completion
                     case .transcript(_, let snapshot):
                         transcript = snapshot.currentTranscript
                         if let authoritative = snapshot.finalTranscript {
                             finalTranscript = authoritative
                         }
                     }
+                }
+
+                if case .some(.skippedSilence(let context)) = lastSessionCompletionResult {
+                    appendDiagnosticSession(
+                        DiagnosticSessionRecord(
+                            sessionID: context.sessionID,
+                            startedAt: context.startedAt,
+                            durationMs: max(Int(Date().timeIntervalSince(context.startedAt) * 1000), 0),
+                            triggerSource: context.triggerSource,
+                            triggerMode: context.triggerMode,
+                            transcriptionEngine: selectedTranscriptionEngineIDForDiagnostics,
+                            modelID: resultModelIDForDiagnostics,
+                            logicModelID: selectedLogicModelIDForDiagnostics,
+                            reasoningEffort: logicSettings.reasoningEffort.rawValue,
+                            formattingProfile: nil,
+                            transcriptionLatencyMs: max(Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000), 0),
+                            llmLatencyMs: nil,
+                            totalLatencyMs: max(Int(Date().timeIntervalSince(context.startedAt) * 1000), 0),
+                            tokensIn: nil,
+                            cachedTokens: nil,
+                            insertionOutcome: nil,
+                            fallbackReason: nil,
+                            targetApp: context.targetAppName,
+                            targetBundleID: context.targetBundleID,
+                            silencePeak: context.audioActivitySummary?.peakLevel,
+                            silenceAverageRMS: context.audioActivitySummary?.averagePower,
+                            silenceVoicedRatio: context.audioActivitySummary?.voicedRatio,
+                            skippedForSilence: true
+                        )
+                    )
+                    selectedTranscriptViewMode = .raw
+                    if interactionSettings.showListeningIndicator {
+                        listeningIndicatorService.showOutcome(.noSpeechDetected)
+                    } else {
+                        listeningIndicatorService.hideListening()
+                    }
+                    reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
+                    state = .done
+                    return
                 }
 
                 guard let result = finalTranscript ?? transcript else {
@@ -733,15 +1015,21 @@ final class TranscriptionViewModel: ObservableObject {
                 let pipelineResult = await postTranscriptionPipeline.processCompletedTranscript(
                     PostTranscriptionPipelineRequest(
                         transcript: result,
-                        activeAppContextOverride: activeAppContextOverride,
-                        insertionTarget: insertionTarget,
+                        recordingSessionContext: recordingSessionContext,
+                        activeAppContextOverride: recordingSessionContext?.lockTargetAtStart == true
+                            ? recordingSessionContext?.activeAppContext
+                            : nil,
+                        glossaryEntries: dictionaryEntries,
                         promptProfiles: promptProfiles,
+                        transcriptionMode: transcriptionMode,
                         logicMode: logicMode,
                         logicSettings: logicSettings,
                         refineSettings: refineSettings,
                         interactionSettings: interactionSettings,
                         autoFormatEnabled: autoFormatEnabled,
                         canRunAutoFormat: canRunAutoFormat,
+                        transcriptionEngineID: selectedTranscriptionEngineIDForDiagnostics,
+                        transcriptionLatencyMs: max(Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000), 0),
                         effectiveAPIKey: effectiveApiKey,
                         selectedRemoteLogicModelID: selectedRemoteLogicModelID,
                         selectedLocalLogicModelID: selectedLocalLogicModelID,
@@ -754,18 +1042,54 @@ final class TranscriptionViewModel: ObservableObject {
                 formattedOutput = pipelineResult.formattedOutput
                 pendingActionItemsJSON = pipelineResult.pendingActionItemsJSON
                 pendingActionItemsRenderedText = pipelineResult.pendingActionItemsRenderedText
+                lastInsertionResult = pipelineResult.insertionResult
                 lastErrorSummary = pipelineResult.lastErrorSummary
                 selectedTranscriptViewMode = .formatted
                 reloadTranscriptHistory()
                 if interactionSettings.showListeningIndicator {
-                    listeningIndicatorService.showCompletedBriefly()
+                    showListeningIndicatorOutcome(for: pipelineResult.insertionResult)
                 } else {
                     listeningIndicatorService.hideListening()
                 }
 
                 state = .done
+                reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
             } catch {
                 listeningIndicatorService.hideListening()
+                lastSessionCompletionResult = .failed(
+                    message: error.localizedDescription,
+                    context: recordingSessionContext
+                )
+                if let recordingSessionContext {
+                    appendDiagnosticSession(
+                        DiagnosticSessionRecord(
+                            sessionID: recordingSessionContext.sessionID,
+                            startedAt: recordingSessionContext.startedAt,
+                            durationMs: max(Int(Date().timeIntervalSince(recordingSessionContext.startedAt) * 1000), 0),
+                            triggerSource: recordingSessionContext.triggerSource,
+                            triggerMode: recordingSessionContext.triggerMode,
+                            transcriptionEngine: selectedTranscriptionEngineIDForDiagnostics,
+                            modelID: resultModelIDForDiagnostics,
+                            logicModelID: selectedLogicModelIDForDiagnostics,
+                            reasoningEffort: logicSettings.reasoningEffort.rawValue,
+                            formattingProfile: nil,
+                            transcriptionLatencyMs: max(Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000), 0),
+                            llmLatencyMs: nil,
+                            totalLatencyMs: max(Int(Date().timeIntervalSince(recordingSessionContext.startedAt) * 1000), 0),
+                            tokensIn: nil,
+                            cachedTokens: nil,
+                            insertionOutcome: .failed,
+                            fallbackReason: nil,
+                            targetApp: recordingSessionContext.targetAppName,
+                            targetBundleID: recordingSessionContext.targetBundleID,
+                            silencePeak: recordingSessionContext.audioActivitySummary?.peakLevel,
+                            silenceAverageRMS: recordingSessionContext.audioActivitySummary?.averagePower,
+                            silenceVoicedRatio: recordingSessionContext.audioActivitySummary?.voicedRatio,
+                            skippedForSilence: false
+                        )
+                    )
+                    reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
+                }
                 if let err = error as? AudioRecorderError {
                     state = .error(err.localizedDescription)
                 } else if let err = error as? OpenAITranscriptionError {
@@ -803,19 +1127,19 @@ final class TranscriptionViewModel: ObservableObject {
             ? (formattedOutput?.clean_text ?? deterministicResult?.text ?? transcriptText)
             : transcriptText
         guard !text.isEmpty else { return }
-        try? insertionService.insert(text: text, autoPaste: false, target: nil)
+        _ = insertionService.insert(text: text, autoPaste: false, target: nil, requiresFrozenTarget: false)
     }
 
     func copyTranscriptRecord(_ record: TranscriptRecord) {
         let text = preferredTranscriptText(for: record)
         guard !text.isEmpty else { return }
-        try? insertionService.insert(text: text, autoPaste: false, target: nil)
+        _ = insertionService.insert(text: text, autoPaste: false, target: nil, requiresFrozenTarget: false)
     }
 
     func copyRawTranscriptRecord(_ record: TranscriptRecord) {
         let text = record.rawText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        try? insertionService.insert(text: text, autoPaste: false, target: nil)
+        _ = insertionService.insert(text: text, autoPaste: false, target: nil, requiresFrozenTarget: false)
     }
 
     func copyTranscriptFeedbackPacket(_ record: TranscriptRecord) {
@@ -837,14 +1161,38 @@ final class TranscriptionViewModel: ObservableObject {
         ]
         .joined(separator: "\n")
 
-        try? insertionService.insert(text: payload, autoPaste: false, target: nil)
+        _ = insertionService.insert(text: payload, autoPaste: false, target: nil, requiresFrozenTarget: false)
     }
 
     func reloadTranscriptHistory(limit: Int = 200) {
         transcriptHistory = transcriptRecordStore.fetchRecentRecords(limit: limit)
     }
 
+    func reloadDiagnosticSessions(limit: Int = 20) {
+        diagnosticSessions = transcriptRecordStore.fetchRecentDiagnosticSessions(limit: limit)
+        diagnosticSessionSummary = transcriptRecordStore.fetchDiagnosticSessionSummary(limit: limit)
+    }
+
+    func reloadDictionaryEntries() {
+        dictionaryEntries = transcriptRecordStore.fetchDictionaryEntries().map(\.glossaryEntry)
+    }
+
+    func upsertDictionaryEntry(from: String, to: String) {
+        transcriptRecordStore.upsertDictionaryEntry(from: from, to: to, note: nil)
+        reloadDictionaryEntries()
+    }
+
+    func replaceDictionaryEntries(_ entries: [GlossaryEntry]) {
+        transcriptRecordStore.replaceDictionaryEntries(entries)
+        dictionaryEntries = entries
+    }
+
     func preferredTranscriptText(for record: TranscriptRecord) -> String {
+        let finalText = record.finalText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !finalText.isEmpty {
+            return finalText
+        }
+
         let formatted = record.llmText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !formatted.isEmpty {
             return formatted
@@ -866,6 +1214,8 @@ final class TranscriptionViewModel: ObservableObject {
         pendingActionItemsJSON = nil
         pendingActionItemsRenderedText = nil
         lastErrorSummary = nil
+        lastSessionCompletionResult = nil
+        lastInsertionResult = nil
         selectedTranscriptViewMode = .raw
         if case .done = state {
             state = .idle
@@ -900,6 +1250,7 @@ final class TranscriptionViewModel: ObservableObject {
                 ManualReformatRequest(
                     transcript: transcript,
                     activeAppContextOverride: nil,
+                    glossaryEntries: dictionaryEntries,
                     profile: profile,
                     logicMode: logicMode,
                     logicSettings: logicSettings,
@@ -923,7 +1274,13 @@ final class TranscriptionViewModel: ObservableObject {
 
     func confirmActionItemsPreviewInsertion() {
         guard let rendered = pendingActionItemsRenderedText, !rendered.isEmpty else { return }
-        try? insertionService.insert(text: rendered, autoPaste: interactionSettings.autoPasteAfterInsert, target: nil)
+        lastInsertionResult = insertionService.insert(
+            text: rendered,
+            autoPaste: interactionSettings.insertionMode == .autoPasteWhenPossible
+                && interactionSettings.autoPasteAfterInsert,
+            target: nil,
+            requiresFrozenTarget: false
+        )
         formattedOutput = makeFormattedOutput(from: rendered)
         selectedTranscriptViewMode = .formatted
         pendingActionItemsJSON = nil
@@ -974,26 +1331,63 @@ final class TranscriptionViewModel: ObservableObject {
         if hotkeyPermissionGranted {
             configureHotkeyMonitoring()
         } else {
-            hotkeyStatusMessage = "Accessibility access is required for Fn / Globe hotkeys. macOS should open the permission prompt."
+            hotkeyStatusState = .failed(message: "Accessibility permission is required for global hotkeys.")
+            hotkeyStatusMessage = "Accessibility permission is required for global hotkeys."
         }
+    }
+
+    func useRecommendedHotkeyFallback() {
+        if let fallback = activeHotkeyStartResult?.recommendedFallback ?? HotkeyBinding.recommendedFallbacks.first {
+            interactionSettings.hotkeyBinding = fallback
+        }
+    }
+
+    func testSelectedHotkey() {
+        startHotkeyVerification(
+            binding: interactionSettings.hotkeyBinding,
+            fallbackMode: .disabled,
+            label: "selected hotkey"
+        )
+    }
+
+    func testRecommendedHotkeyFallback() {
+        guard let fallback = activeHotkeyStartResult?.recommendedFallback ?? HotkeyBinding.recommendedFallbacks.first else {
+            hotkeyTestMessage = "No recommended fallback is available."
+            return
+        }
+        startHotkeyVerification(
+            binding: fallback,
+            fallbackMode: .disabled,
+            label: "recommended fallback"
+        )
     }
 
     private func configureHotkeyMonitoring() {
         globalHotkeyService.stopMonitoring()
+        hotkeyTestTask?.cancel()
+        isRunningHotkeyTest = false
         hotkeyPermissionGranted = globalHotkeyService.hasAccessibilityPermission()
+        activeHotkeyStartResult = nil
+        effectiveHotkeyBindingTitle = interactionSettings.hotkeyBinding.displayTitle
+        recommendedHotkeyFallbackTitle = nil
 
         guard !isCapturingHotkey else {
+            hotkeyStatusState = .inactive
             hotkeyStatusMessage = "Press a key combination or a modifier key (Fn supported)."
             return
         }
 
         guard interactionSettings.hotkeyEnabled else {
+            hotkeyStatusState = .inactive
             hotkeyStatusMessage = "Hotkey monitoring is off."
             return
         }
 
-        guard interactionSettings.hotkeyBinding.isValidGlobalHotkey else {
-            hotkeyStatusMessage = "Select a hotkey with at least one modifier, or use Fn by itself."
+        let validation = interactionSettings.hotkeyBinding.validationResult
+        guard validation.isValid else {
+            let message = validation.blockingIssues.first?.message ?? "Select a valid hotkey."
+            hotkeyStatusState = .failed(message: message)
+            hotkeyStatusMessage = message
             return
         }
 
@@ -1003,23 +1397,47 @@ final class TranscriptionViewModel: ObservableObject {
         }
 
         guard hotkeyPermissionGranted else {
-            hotkeyStatusMessage = "Enable Accessibility access to use Fn / Globe hotkeys."
+            let message = "Accessibility permission is required for global hotkeys."
+            hotkeyStatusState = .failed(message: message)
+            hotkeyStatusMessage = message
             return
         }
 
-        let config = GlobalHotkeyConfig(
-            keyCode: interactionSettings.hotkeyBinding.keyCode,
-            modifierFlagsRawValue: interactionSettings.hotkeyBinding.modifierFlagsRawValue,
-            modifierKeyRawValue: interactionSettings.hotkeyBinding.modifierKeyRawValue
-        )
-
-        globalHotkeyService.startMonitoring(config: config) { [weak self] event in
+        let startResult = globalHotkeyService.startMonitoring(
+            binding: interactionSettings.hotkeyBinding,
+            fallbackMode: interactionSettings.functionKeyFallbackMode
+        ) { [weak self] event in
             Task { @MainActor in
+                self?.appendHotkeyRuntimeLog(event: event)
                 self?.handleHotkeyEvent(event)
             }
         }
+        activeHotkeyStartResult = startResult
+        effectiveHotkeyBindingTitle = startResult.effectiveBinding.displayTitle
+        recommendedHotkeyFallbackTitle = startResult.recommendedFallback?.displayTitle
+        appendHotkeyRuntimeLog(event: nil, overrideResult: startResult)
 
-        hotkeyStatusMessage = "Hotkey active: \(interactionSettings.hotkeyBinding.displayTitle) • \(hotkeyBehaviorSummary)"
+        if !startResult.isActive {
+            let message = startResult.message ?? "No global hotkey could be activated."
+            hotkeyStatusState = .failed(message: message)
+            hotkeyStatusMessage = message
+        } else if startResult.fallbackWasUsed {
+            let message = startResult.message ?? "Fallback shortcut is active."
+            hotkeyStatusState = .fallback(
+                original: startResult.originalBinding.displayTitle,
+                effective: startResult.effectiveBinding.displayTitle,
+                message: message
+            )
+            hotkeyStatusMessage = message
+        } else if let warning = validation.warnings.first?.message {
+            let message = "Hotkey active: \(startResult.effectiveBinding.displayTitle) • \(warning)"
+            hotkeyStatusState = .active(bindingTitle: startResult.effectiveBinding.displayTitle, message: message)
+            hotkeyStatusMessage = message
+        } else {
+            let message = startResult.message ?? "Hotkey active: \(startResult.effectiveBinding.displayTitle) • \(hotkeyBehaviorSummary)"
+            hotkeyStatusState = .active(bindingTitle: startResult.effectiveBinding.displayTitle, message: message)
+            hotkeyStatusMessage = message
+        }
     }
 
     private func handleHotkeyEvent(_ event: GlobalHotkeyEvent) {
@@ -1088,6 +1506,48 @@ final class TranscriptionViewModel: ObservableObject {
         }
     }
 
+    private var sessionOutcomeStatusMessage: String? {
+        switch lastSessionCompletionResult {
+        case .some(.skippedSilence(_)):
+            return "Silence ignored"
+        case .some(.failed(let message, _)):
+            return message
+        case .some(.transcribed(_)), .none:
+            if let insertionResult = lastInsertionResult {
+                switch insertionResult {
+                case .pasted:
+                    return "Inserted."
+                case .copiedOnly, .copiedOnlyNeedsPermission, .failed:
+                    return insertionResult.userMessage
+                }
+            }
+            return nil
+        }
+    }
+
+    private func showListeningIndicatorOutcome(for insertionResult: InsertionResult?) {
+        guard interactionSettings.showListeningIndicator else {
+            listeningIndicatorService.hideListening()
+            return
+        }
+
+        guard let insertionResult else {
+            listeningIndicatorService.showCompletedBriefly()
+            return
+        }
+
+        switch insertionResult {
+        case .pasted:
+            listeningIndicatorService.showOutcome(.inserted)
+        case .copiedOnly(let reason):
+            listeningIndicatorService.showOutcome(.copiedOnly(reason.userMessage))
+        case .copiedOnlyNeedsPermission:
+            listeningIndicatorService.showOutcome(.copiedOnly(ClipboardFallbackReason.accessibilityPermissionRequired.userMessage))
+        case .failed(let reason):
+            listeningIndicatorService.showOutcome(.failed(InsertionResult.failed(reason: reason).userMessage))
+        }
+    }
+
     private var hotkeyBehaviorSummary: String {
         switch interactionSettings.hotkeyTriggerMode {
         case .holdToTalk:
@@ -1103,13 +1563,17 @@ final class TranscriptionViewModel: ObservableObject {
     private func handleHotkeyCapture(event: NSEvent) -> Bool {
         guard isCapturingHotkey else { return false }
         guard let binding = HotkeyBinding.capture(from: event) else { return false }
-        guard binding.isValidGlobalHotkey else {
-            hotkeyStatusMessage = "Use at least one modifier, or use Fn by itself."
+        let validation = binding.validationResult
+        guard validation.isValid else {
+            hotkeyStatusMessage = validation.blockingIssues.first?.message ?? "Select a valid hotkey."
             return true
         }
 
         teardownHotkeyCapture()
         interactionSettings.hotkeyBinding = binding
+        if let warning = validation.warnings.first?.message {
+            hotkeyStatusMessage = warning
+        }
         return true
     }
 #endif
@@ -1122,6 +1586,81 @@ final class TranscriptionViewModel: ObservableObject {
         }
 #endif
         isCapturingHotkey = false
+    }
+
+    private func startHotkeyVerification(
+        binding: HotkeyBinding,
+        fallbackMode: FunctionKeyFallbackMode,
+        label: String
+    ) {
+        guard hotkeyPermissionGranted else {
+            hotkeyTestMessage = "Accessibility permission is required for global hotkeys."
+            return
+        }
+
+        hotkeyTestTask?.cancel()
+        isRunningHotkeyTest = true
+        hotkeyTestMessage = nil
+        globalHotkeyService.stopMonitoring()
+
+        var observedResult: HotkeyStartResult?
+        let result = globalHotkeyService.startMonitoring(binding: binding, fallbackMode: fallbackMode) { [weak self] event in
+            Task { @MainActor in
+                self?.appendHotkeyRuntimeLog(event: event, overrideResult: observedResult)
+                self?.hotkeyTestMessage = "Detected \(event.rawValue) for \(observedResult?.effectiveBinding.displayTitle ?? binding.displayTitle)."
+                self?.hotkeyTestTask?.cancel()
+                self?.isRunningHotkeyTest = false
+                self?.configureHotkeyMonitoring()
+            }
+        }
+        observedResult = result
+        appendHotkeyRuntimeLog(event: nil, overrideResult: result)
+
+        guard result.isActive else {
+            isRunningHotkeyTest = false
+            hotkeyTestMessage = result.message ?? "No global hotkey could be activated."
+            configureHotkeyMonitoring()
+            return
+        }
+
+        hotkeyTestMessage = "Background the app and hold \(result.effectiveBinding.displayTitle) to test the \(label) in the next 6 seconds."
+        hotkeyTestTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                self?.isRunningHotkeyTest = false
+                self?.hotkeyTestMessage = "\(binding.displayTitle) was not detected during the test window. Recommended fallback: \(result.recommendedFallback?.displayTitle ?? "none")."
+                self?.configureHotkeyMonitoring()
+            }
+        }
+    }
+
+    private func appendHotkeyRuntimeLog(
+        event: GlobalHotkeyEvent?,
+        overrideResult: HotkeyStartResult? = nil
+    ) {
+        let result = overrideResult ?? activeHotkeyStartResult
+        let selectedTitle = result?.originalBinding.displayTitle ?? interactionSettings.hotkeyBinding.displayTitle
+        let effectiveTitle = result?.effectiveBinding.displayTitle ?? selectedTitle
+        let backend = result?.backend ?? .unavailable
+        let fallbackWasUsed = result?.fallbackWasUsed ?? false
+        let permissionGranted = result?.permissionGranted ?? hotkeyPermissionGranted
+
+        hotkeyRuntimeLogs.insert(
+            HotkeyRuntimeLog(
+                timestamp: Date(),
+                selectedBindingTitle: selectedTitle,
+                effectiveBindingTitle: effectiveTitle,
+                backend: backend,
+                fallbackWasUsed: fallbackWasUsed,
+                permissionGranted: permissionGranted,
+                event: event
+            ),
+            at: 0
+        )
+        if hotkeyRuntimeLogs.count > 20 {
+            hotkeyRuntimeLogs.removeLast(hotkeyRuntimeLogs.count - 20)
+        }
     }
 
     private func refreshRemoteModelsTask(apiKey: String) async {
@@ -1301,7 +1840,9 @@ final class TranscriptionViewModel: ObservableObject {
             return TranscriptionSessionRequest(
                 mode: .remote,
                 localModel: selectedLocalModel,
-                options: options
+                options: options,
+                interactionSettings: interactionSettings,
+                recordingSessionContext: activeRecordingSessionContext
             )
         case .local:
             let options = TranscriptionOptions(
@@ -1321,7 +1862,9 @@ final class TranscriptionViewModel: ObservableObject {
             return TranscriptionSessionRequest(
                 mode: .local,
                 localModel: selectedLocalModel,
-                options: options
+                options: options,
+                interactionSettings: interactionSettings,
+                recordingSessionContext: activeRecordingSessionContext
             )
         }
     }
@@ -1448,7 +1991,25 @@ final class TranscriptionViewModel: ObservableObject {
             }
             return "Select a remote transcription model in Settings."
         case .local:
-            return "\(selectedLocalModel.title) is coming soon. Choose Apple On-Device."
+            switch selectedLocalModel.backend {
+            case .appleSpeech:
+                return "Local transcription is unavailable right now."
+            case .whisperCpp:
+                guard whisperRuntimeStatus.isAvailable else {
+                    return whisperRuntimeStatus.message
+                }
+
+                switch localWhisperInstallState(for: selectedLocalModel) {
+                case .notInstalled:
+                    return "\(selectedLocalModel.title) is not installed. Download the model in Settings."
+                case .downloading:
+                    return "Downloading \(selectedLocalModel.title)…"
+                case .installed:
+                    return "Local Whisper is ready."
+                case .failed(let message):
+                    return message
+                }
+            }
         }
     }
 
@@ -1463,10 +2024,24 @@ final class TranscriptionViewModel: ObservableObject {
             }
             return "Ready to record with remote transcription."
         case .local:
-            if !selectedLocalModel.isImplemented {
-                return "\(selectedLocalModel.title) is coming soon."
+            switch selectedLocalModel.backend {
+            case .appleSpeech:
+                return "Ready to record with local transcription."
+            case .whisperCpp:
+                guard whisperRuntimeStatus.isAvailable else {
+                    return whisperRuntimeStatus.message
+                }
+                switch localWhisperInstallState(for: selectedLocalModel) {
+                case .notInstalled:
+                    return "\(selectedLocalModel.title) is not installed."
+                case .downloading:
+                    return "Downloading \(selectedLocalModel.title)…"
+                case .installed:
+                    return "Ready to record with \(selectedLocalModel.title)."
+                case .failed(let message):
+                    return message
+                }
             }
-            return "Ready to record with local transcription."
         }
     }
 
@@ -1493,9 +2068,110 @@ final class TranscriptionViewModel: ObservableObject {
         UserDefaults.standard.set(data, forKey: Self.savedRefineSettingsKey)
     }
 
+    private func migrateLegacyGlossaryIfNeeded() {
+        let persistedEntries = transcriptRecordStore.fetchDictionaryEntries()
+        if !persistedEntries.isEmpty {
+            if !refineSettings.glossary.isEmpty {
+                refineSettings.glossary = []
+            }
+            return
+        }
+
+        let legacyEntries = refineSettings.glossary
+        guard !legacyEntries.isEmpty else { return }
+        transcriptRecordStore.replaceDictionaryEntries(legacyEntries)
+        refineSettings.glossary = []
+    }
+
     private func persistInteractionSettings() {
         guard let data = try? JSONEncoder().encode(interactionSettings) else { return }
         UserDefaults.standard.set(data, forKey: Self.savedInteractionSettingsKey)
+    }
+
+    private var resultModelIDForDiagnostics: String {
+        switch transcriptionMode {
+        case .remote:
+            return selectedRemoteModelID
+        case .local:
+            return selectedLocalModel.rawValue
+        }
+    }
+
+    private var selectedTranscriptionEngineIDForDiagnostics: String {
+        switch transcriptionMode {
+        case .remote:
+            return "openai-batch-sse"
+        case .local:
+            return selectedLocalModel.backend.engineID
+        }
+    }
+
+    private var selectedLogicModelIDForDiagnostics: String {
+        switch logicMode {
+        case .remote:
+            return selectedRemoteLogicModelID
+        case .local:
+            return selectedLocalLogicModelID
+        }
+    }
+
+    private func appendDiagnosticSession(_ record: DiagnosticSessionRecord) {
+        transcriptRecordStore.appendDiagnosticSession(record)
+    }
+
+    private func localWhisperInstallState(for model: LocalTranscriptionModel) -> WhisperModelInstallState {
+        whisperModelInstallStates[model] ?? .notInstalled
+    }
+
+    func localModelBadgeText(_ model: LocalTranscriptionModel) -> String {
+        switch model.backend {
+        case .appleSpeech:
+            return "Ready"
+        case .whisperCpp:
+            if !whisperRuntimeStatus.isSupported {
+                return "Unavailable"
+            }
+            switch localWhisperInstallState(for: model) {
+            case .notInstalled:
+                return model.recommendedForFirstDownload ? "Download" : "Install"
+            case .downloading:
+                return "Downloading"
+            case .installed:
+                return selectedLocalModel == model ? "Ready" : "Installed"
+            case .failed:
+                return "Retry"
+            }
+        }
+    }
+
+    func localModelNotes(_ model: LocalTranscriptionModel) -> String {
+        switch model.backend {
+        case .appleSpeech:
+            return ""
+        case .whisperCpp:
+            if !whisperRuntimeStatus.isSupported {
+                return "Apple Silicon required."
+            }
+            switch localWhisperInstallState(for: model) {
+            case .notInstalled:
+                return model.recommendedForFirstDownload ? "Recommended first download." : "Download once for offline transcription."
+            case .downloading:
+                return "Model download in progress."
+            case .installed:
+                return "Stored in Application Support for offline use."
+            case .failed(let message):
+                return message
+            }
+        }
+    }
+
+    func isLocalModelSelectable(_ model: LocalTranscriptionModel) -> Bool {
+        switch model.backend {
+        case .appleSpeech:
+            return true
+        case .whisperCpp:
+            return whisperRuntimeStatus.isSupported
+        }
     }
 
     private var effectiveApiKey: String? {

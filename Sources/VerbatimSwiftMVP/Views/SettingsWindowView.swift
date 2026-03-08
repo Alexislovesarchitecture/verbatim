@@ -5,6 +5,7 @@ import AppKit
 
 private enum SettingsSection: String, CaseIterable, Identifiable {
     case general
+    case diagnostics
     case testing
     case transcription
     case logic
@@ -15,6 +16,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "General"
+        case .diagnostics:
+            return "Diagnostics"
         case .testing:
             return "Testing"
         case .transcription:
@@ -28,6 +31,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "Hotkeys, listening feedback, and insertion behavior."
+        case .diagnostics:
+            return "Recent recording sessions, fallbacks, and latency summaries."
         case .testing:
             return "Record, review, and manually reformat transcripts away from the home screen."
         case .transcription:
@@ -41,6 +46,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return "gearshape"
+        case .diagnostics:
+            return "chart.bar.xaxis"
         case .testing:
             return "waveform.and.mic"
         case .transcription:
@@ -54,6 +61,8 @@ private enum SettingsSection: String, CaseIterable, Identifiable {
         switch self {
         case .general:
             return .mint
+        case .diagnostics:
+            return .amber
         case .testing:
             return .cobalt
         case .transcription:
@@ -199,10 +208,16 @@ struct SettingsWindowView: View {
                         }
                         .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
 
-                        if !viewModel.hotkeyPermissionGranted {
+                        if viewModel.shouldShowPermissionWarning {
                             permissionPanel
                                 .applyLiquidCardStyle(cornerRadius: 28, tone: .cream, padding: 22)
                         }
+                    case .diagnostics:
+                        VStack(spacing: 18) {
+                            diagnosticsSummaryPanel
+                            diagnosticsSessionPanel
+                        }
+                        .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
                     case .testing:
                         LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 18) {
                             testingCapturePanel
@@ -300,7 +315,7 @@ struct SettingsWindowView: View {
             Toggle("Enable global hotkey", isOn: $viewModel.interactionSettings.hotkeyEnabled)
 
             HStack {
-                Text("Current binding")
+                Text("Selected binding")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(VerbatimPalette.mutedInk)
 
@@ -310,6 +325,21 @@ struct SettingsWindowView: View {
                     .font(.system(size: 12, weight: .semibold, design: .rounded))
                     .foregroundStyle(VerbatimPalette.ink)
                     .applyStatusBadgeEffect()
+            }
+
+            if viewModel.hasEffectiveHotkeyOverride {
+                HStack {
+                    Text("Effective binding")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+
+                    Spacer()
+
+                    Text(viewModel.effectiveHotkeyBindingTitle)
+                        .font(.system(size: 12, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+                        .applyStatusBadgeEffect()
+                }
             }
 
             HStack(spacing: 10) {
@@ -346,6 +376,93 @@ struct SettingsWindowView: View {
                 .pickerStyle(.segmented)
             }
 
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Fn / Globe fallback")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+
+                Picker("Fn / Globe fallback", selection: $viewModel.interactionSettings.functionKeyFallbackMode) {
+                    ForEach(FunctionKeyFallbackMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Silence detection")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+
+                Toggle("Skip silent hotkey recordings", isOn: $viewModel.interactionSettings.silenceDetectionEnabled)
+
+                Picker("Sensitivity", selection: $viewModel.interactionSettings.silenceSensitivity) {
+                    ForEach(SilenceSensitivity.allCases) { sensitivity in
+                        Text(sensitivity.title).tag(sensitivity)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(!viewModel.interactionSettings.silenceDetectionEnabled)
+
+                Toggle(
+                    "Always transcribe short recordings",
+                    isOn: $viewModel.interactionSettings.alwaysTranscribeShortRecordings
+                )
+                .disabled(!viewModel.interactionSettings.silenceDetectionEnabled)
+            }
+
+            Toggle("Lock target app at start", isOn: $viewModel.interactionSettings.lockTargetAtStart)
+
+            HStack(spacing: 10) {
+                Button("Test selected hotkey") {
+                    viewModel.testSelectedHotkey()
+                }
+                .applyGlassButtonStyle()
+
+                Button("Test recommended fallback") {
+                    viewModel.testRecommendedHotkeyFallback()
+                }
+                .applyGlassButtonStyle()
+                .disabled(!viewModel.canUseRecommendedHotkeyFallback)
+
+                if viewModel.canUseRecommendedHotkeyFallback {
+                    Button("Use recommended fallback") {
+                        viewModel.useRecommendedHotkeyFallback()
+                    }
+                    .applyGlassButtonStyle()
+                }
+            }
+
+            if let issue = viewModel.hotkeyValidationResult.blockingIssues.first {
+                Text(issue.message)
+                    .font(.caption)
+                    .foregroundStyle(Color.orange)
+            } else if let warning = viewModel.hotkeyValidationResult.warnings.first {
+                Text(warning.message)
+                    .font(.caption)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            }
+
+            if let hotkeyTestMessage = viewModel.hotkeyTestMessage, !hotkeyTestMessage.isEmpty {
+                Text(hotkeyTestMessage)
+                    .font(.caption)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            }
+
+            if !viewModel.hotkeyRuntimeLogs.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Recent hotkey activity")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+
+                    ForEach(Array(viewModel.hotkeyRuntimeLogs.prefix(3))) { log in
+                        Text(hotkeyLogText(log))
+                            .font(.caption)
+                            .foregroundStyle(VerbatimPalette.mutedInk)
+                    }
+                }
+            }
+
             if viewModel.isCapturingHotkey {
                 Text("Press any key combination, or use Fn / Globe directly.")
                     .font(.caption)
@@ -363,7 +480,38 @@ struct SettingsWindowView: View {
 
             Toggle("Show listening indicator", isOn: $viewModel.interactionSettings.showListeningIndicator)
             Toggle("Play start/stop sound cues", isOn: $viewModel.interactionSettings.playSoundCues)
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Insertion mode")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+
+                Picker("Insertion mode", selection: $viewModel.interactionSettings.insertionMode) {
+                    ForEach(RecordingInsertionMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+            }
+
             Toggle("Auto-paste after insert", isOn: $viewModel.interactionSettings.autoPasteAfterInsert)
+                .disabled(viewModel.interactionSettings.insertionMode != .autoPasteWhenPossible)
+
+            Toggle("Show permission warnings", isOn: $viewModel.interactionSettings.showPermissionWarnings)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Clipboard restore")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+
+                Text(viewModel.interactionSettings.clipboardRestoreMode.title)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.ink)
+
+                Text("Copied text stays on the clipboard in this release. Auto-restore is intentionally off.")
+                    .font(.caption)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            }
 
             VStack(alignment: .leading, spacing: 8) {
                 Text("Appearance")
@@ -380,7 +528,7 @@ struct SettingsWindowView: View {
 
             Text(viewModel.hotkeyStatusMessage)
                 .font(.caption)
-                .foregroundStyle(viewModel.hotkeyPermissionGranted ? VerbatimPalette.mutedInk : Color.orange)
+                .foregroundStyle(viewModel.shouldShowPermissionWarning ? Color.orange : VerbatimPalette.mutedInk)
         }
     }
 
@@ -388,17 +536,131 @@ struct SettingsWindowView: View {
         VStack(alignment: .leading, spacing: 12) {
             panelHeading(
                 title: "Accessibility Permission",
-                subtitle: "Fn / Globe hotkeys and insertion need Accessibility access."
+                subtitle: "Global hotkeys and auto-paste need Accessibility access."
             )
+
+            Text(viewModel.accessibilityPermissionStateDescription)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(viewModel.hotkeyPermissionGranted ? VerbatimPalette.ink : Color.orange)
 
             Text("Prompt macOS for access, then enable Verbatim in System Settings > Privacy & Security > Accessibility.")
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
 
+            Text(viewModel.accessibilityPermissionHelpText)
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
             Button("Prompt Accessibility Access") {
                 viewModel.requestAccessibilityPermissionPrompt()
             }
             .applyGlassButtonStyle(prominent: true)
+        }
+    }
+
+    private var diagnosticsSummaryPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            panelHeading(
+                title: "Summary",
+                subtitle: "Quick operational signals for recent hotkey and manual sessions."
+            )
+
+            LazyVGrid(columns: settingsColumns, alignment: .leading, spacing: 12) {
+                diagnosticMetricCard(
+                    title: "Avg total latency",
+                    value: viewModel.diagnosticSessionSummary.averageTotalLatencyMs.map { "\($0) ms" } ?? "n/a"
+                )
+                diagnosticMetricCard(
+                    title: "Cache hit rate",
+                    value: percentageString(viewModel.diagnosticSessionSummary.cacheHitRate)
+                )
+                diagnosticMetricCard(
+                    title: "Silence skip rate",
+                    value: percentageString(viewModel.diagnosticSessionSummary.silenceSkipRate)
+                )
+                diagnosticMetricCard(
+                    title: "Paste fallback rate",
+                    value: percentageString(viewModel.diagnosticSessionSummary.pasteFailureRate)
+                )
+                diagnosticMetricCard(
+                    title: "Permission fallbacks",
+                    value: "\(viewModel.diagnosticSessionSummary.permissionFallbackCount)"
+                )
+            }
+        }
+    }
+
+    private var diagnosticsSessionPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                panelHeading(
+                    title: "Recent Sessions",
+                    subtitle: "Silent skips appear here even though they stay out of transcript history."
+                )
+
+                Spacer()
+
+                Picker("Recent sessions", selection: $viewModel.diagnosticsSessionLimit) {
+                    ForEach(DiagnosticsSessionLimit.allCases) { limit in
+                        Text(limit.title).tag(limit)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+            }
+
+            if viewModel.diagnosticSessions.isEmpty {
+                Text("No diagnostic sessions recorded yet.")
+                    .font(.caption)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(viewModel.diagnosticSessions) { session in
+                        HStack(alignment: .top, spacing: 12) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(session.targetApp ?? "Unknown App")
+                                    .font(.system(size: 13, weight: .semibold, design: .rounded))
+                                    .foregroundStyle(VerbatimPalette.ink)
+
+                                Text(diagnosticsTimestampString(session.startedAt))
+                                    .font(.caption)
+                                    .foregroundStyle(VerbatimPalette.mutedInk)
+                            }
+
+                            Spacer()
+
+                            VStack(alignment: .trailing, spacing: 4) {
+                                Text(diagnosticsOutcomeLabel(session))
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(VerbatimPalette.ink)
+
+                                Text("\(session.durationMs) ms")
+                                    .font(.caption)
+                                    .foregroundStyle(VerbatimPalette.mutedInk)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        HStack(spacing: 12) {
+                            diagnosticsPill(session.triggerSource.rawValue.capitalized)
+                            diagnosticsPill("Engine: \(session.transcriptionEngine ?? "n/a")")
+                            diagnosticsPill("STT: \(session.modelID ?? "n/a")")
+                            diagnosticsPill("Logic: \(session.logicModelID ?? "n/a")")
+                            diagnosticsPill("Reasoning: \(session.reasoningEffort ?? "n/a")")
+                            diagnosticsPill(session.insertionOutcome?.rawValue.replacingOccurrences(of: "_", with: " ") ?? "n/a")
+                            if session.skippedForSilence {
+                                diagnosticsPill("silence skipped")
+                            }
+                            if let fallback = session.fallbackReason {
+                                diagnosticsPill(fallback.userMessage)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Divider()
+                    }
+                }
+            }
         }
     }
 
@@ -552,6 +814,51 @@ struct SettingsWindowView: View {
             Text("Switch to Remote when you want OpenAI transcription models and their richer feature set.")
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Whisper runtime")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+
+                Text(viewModel.localTranscriptionRuntimeStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(viewModel.isLocalTranscriptionRuntimeStatusError ? Color.orange : VerbatimPalette.mutedInk)
+
+                if let systemInfo = viewModel.whisperRuntimeSystemInfoSummary,
+                   viewModel.selectedLocalModel.backend == .whisperCpp {
+                    Text(systemInfo)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+                }
+
+                HStack(spacing: 10) {
+                    Button("Check Whisper runtime", systemImage: "bolt.badge.checkmark") {
+                        viewModel.refreshWhisperRuntime()
+                    }
+                    .applyGlassButtonStyle()
+
+                    if let actionTitle = viewModel.selectedLocalModelPrimaryActionTitle {
+                        Button(actionTitle, systemImage: "arrow.down.circle") {
+                            viewModel.downloadSelectedLocalWhisperModel()
+                        }
+                        .applyGlassButtonStyle(prominent: true)
+                        .disabled(!viewModel.canDownloadSelectedLocalWhisperModel || isBusy)
+                    }
+
+                    if viewModel.canRemoveSelectedLocalWhisperModel {
+                        Button("Remove model", systemImage: "trash") {
+                            viewModel.removeSelectedLocalWhisperModel()
+                        }
+                        .applyGlassButtonStyle()
+                        .disabled(isBusy)
+                    }
+                }
+            }
+            .applyInsetWellStyle(cornerRadius: 24, padding: 18)
+
+            Text(viewModel.selectedLocalModelSecondaryNote)
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
         }
     }
 
@@ -624,14 +931,14 @@ struct SettingsWindowView: View {
                                     title: model.title,
                                     subtitle: model.detail,
                                     isSelected: viewModel.selectedLocalModel == model,
-                                    badgeText: model.isImplemented ? "Ready" : "Soon",
-                                    isAvailable: model.isImplemented,
-                                    notes: model.isImplemented ? "" : "Coming soon",
+                                    badgeText: viewModel.localModelBadgeText(model),
+                                    isAvailable: viewModel.isLocalModelSelectable(model),
+                                    notes: viewModel.localModelNotes(model),
                                     accent: .amber
                                 )
                             }
                             .buttonStyle(.plain)
-                            .disabled(isBusy)
+                            .disabled(isBusy || !viewModel.isLocalModelSelectable(model))
                         }
                     }
                 }
@@ -1171,6 +1478,74 @@ struct SettingsWindowView: View {
         transcript.segments.contains { segment in
             !(segment.speaker?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         }
+    }
+
+    private func diagnosticMetricCard(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            Text(value)
+                .font(.system(size: 18, weight: .semibold, design: .rounded))
+                .foregroundStyle(VerbatimPalette.ink)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.white.opacity(colorScheme == .dark ? 0.06 : 0.22))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func diagnosticsPill(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold, design: .rounded))
+            .foregroundStyle(VerbatimPalette.ink)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(Color.white.opacity(colorScheme == .dark ? 0.08 : 0.28))
+            .clipShape(Capsule(style: .continuous))
+    }
+
+    private func diagnosticsTimestampString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func diagnosticsOutcomeLabel(_ session: DiagnosticSessionRecord) -> String {
+        if session.skippedForSilence {
+            return "Silence ignored"
+        }
+        if let fallback = session.fallbackReason {
+            return fallback.userMessage
+        }
+        if let outcome = session.insertionOutcome {
+            switch outcome {
+            case .inserted:
+                return "Inserted"
+            case .copiedOnly:
+                return "Copied only"
+            case .copiedOnlyNeedsPermission:
+                return "Needs Accessibility"
+            case .failed:
+                return "Failed"
+            }
+        }
+        return "Completed"
+    }
+
+    private func percentageString(_ value: Double) -> String {
+        "\(Int((value * 100).rounded()))%"
+    }
+
+    private func hotkeyLogText(_ log: HotkeyRuntimeLog) -> String {
+        let formatter = DateFormatter()
+        formatter.timeStyle = .medium
+        formatter.dateStyle = .none
+        let eventLabel = log.event?.rawValue ?? "registered"
+        let fallbackLabel = log.fallbackWasUsed ? "fallback" : log.backend.rawValue
+        return "\(formatter.string(from: log.timestamp)) • \(eventLabel) • \(log.effectiveBindingTitle) • \(fallbackLabel)"
     }
 }
 

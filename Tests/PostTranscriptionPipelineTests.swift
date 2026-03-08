@@ -41,15 +41,19 @@ final class PostTranscriptionPipelineTests: XCTestCase {
                     modelID: "gpt-4o-mini-transcribe",
                     responseFormat: "json"
                 ),
+                recordingSessionContext: nil,
                 activeAppContextOverride: nil,
-                insertionTarget: nil,
+                glossaryEntries: [],
                 promptProfiles: [makeProfile(id: "cleanup")],
+                transcriptionMode: .remote,
                 logicMode: .remote,
                 logicSettings: LogicSettings(),
                 refineSettings: RefineSettings(workEnabled: true, emailEnabled: false, personalEnabled: false, otherEnabled: false, previewBeforeInsert: false),
                 interactionSettings: InteractionSettings(),
                 autoFormatEnabled: true,
                 canRunAutoFormat: true,
+                transcriptionEngineID: "openai-batch-sse",
+                transcriptionLatencyMs: 80,
                 effectiveAPIKey: "test-key",
                 selectedRemoteLogicModelID: "gpt-5-mini",
                 selectedLocalLogicModelID: "gpt-oss-20b",
@@ -103,6 +107,7 @@ final class PostTranscriptionPipelineTests: XCTestCase {
                     responseFormat: "json"
                 ),
                 activeAppContextOverride: nil,
+                glossaryEntries: [],
                 profile: makeProfile(id: "action_items", outputMode: .jsonSchema),
                 logicMode: .remote,
                 logicSettings: LogicSettings(),
@@ -145,15 +150,19 @@ final class PostTranscriptionPipelineTests: XCTestCase {
                     modelID: "gpt-4o-mini-transcribe",
                     responseFormat: "json"
                 ),
+                recordingSessionContext: nil,
                 activeAppContextOverride: nil,
-                insertionTarget: nil,
+                glossaryEntries: [],
                 promptProfiles: [makeProfile(id: "cleanup")],
+                transcriptionMode: .remote,
                 logicMode: .remote,
                 logicSettings: LogicSettings(),
                 refineSettings: RefineSettings(workEnabled: false, emailEnabled: false, personalEnabled: false, otherEnabled: false, previewBeforeInsert: true),
                 interactionSettings: InteractionSettings(),
                 autoFormatEnabled: false,
                 canRunAutoFormat: false,
+                transcriptionEngineID: "openai-batch-sse",
+                transcriptionLatencyMs: 40,
                 effectiveAPIKey: nil,
                 selectedRemoteLogicModelID: "gpt-5-mini",
                 selectedLocalLogicModelID: "gpt-oss-20b",
@@ -197,15 +206,25 @@ final class PostTranscriptionPipelineTests: XCTestCase {
                     modelID: "gpt-4o-mini-transcribe",
                     responseFormat: "json"
                 ),
+                recordingSessionContext: RecordingSessionContext(
+                    activeAppContext: capturedContext,
+                    insertionTarget: capturedContext.insertionTarget,
+                    stylePreset: .casual,
+                    triggerSource: .hotkey,
+                    triggerMode: .holdToTalk
+                ),
                 activeAppContextOverride: capturedContext,
-                insertionTarget: capturedContext.insertionTarget,
+                glossaryEntries: [],
                 promptProfiles: [makeProfile(id: "cleanup")],
+                transcriptionMode: .remote,
                 logicMode: .remote,
                 logicSettings: LogicSettings(),
                 refineSettings: RefineSettings(workEnabled: false, emailEnabled: false, personalEnabled: true, otherEnabled: false, previewBeforeInsert: false),
                 interactionSettings: InteractionSettings(),
                 autoFormatEnabled: false,
                 canRunAutoFormat: false,
+                transcriptionEngineID: LocalTranscriptionBackend.whisperCpp.engineID,
+                transcriptionLatencyMs: 60,
                 effectiveAPIKey: nil,
                 selectedRemoteLogicModelID: "gpt-5-mini",
                 selectedLocalLogicModelID: "gpt-oss-20b",
@@ -215,6 +234,9 @@ final class PostTranscriptionPipelineTests: XCTestCase {
 
         XCTAssertEqual(insertionService.lastTarget?.bundleID, "com.apple.MobileSMS")
         XCTAssertEqual(insertionService.lastTarget?.processIdentifier, 999)
+        XCTAssertEqual(recordStore.diagnosticSessions.first?.modelID, "gpt-4o-mini-transcribe")
+        XCTAssertEqual(recordStore.diagnosticSessions.first?.logicModelID, "gpt-5-mini")
+        XCTAssertEqual(recordStore.diagnosticSessions.first?.reasoningEffort, LogicSettings().reasoningEffort.rawValue)
     }
 
     private func makeProfile(id: String, outputMode: PromptOutputMode = .text) -> PromptProfile {
@@ -283,11 +305,15 @@ private final class FakeLLMFormatterService: LLMFormatterServiceProtocol {
 
 private final class FakeRecordStore: TranscriptRecordStoreProtocol {
     private(set) var records: [TranscriptRecord] = []
+    private(set) var diagnosticSessions: [DiagnosticSessionRecord] = []
 
     func fetchCachedResult(for key: LLMCacheKey) -> LLMResult? { nil }
     func saveCachedResult(_ result: LLMResult, for key: LLMCacheKey) {}
     func appendRecord(_ record: TranscriptRecord) { records.append(record) }
     func fetchRecentRecords(limit: Int) -> [TranscriptRecord] { Array(records.prefix(limit)) }
+    func appendDiagnosticSession(_ record: DiagnosticSessionRecord) { diagnosticSessions.append(record) }
+    func fetchRecentDiagnosticSessions(limit: Int) -> [DiagnosticSessionRecord] { Array(diagnosticSessions.prefix(limit)) }
+    func fetchDiagnosticSessionSummary(limit: Int) -> DiagnosticSessionSummary { .empty }
     func makeCacheKey(profile: PromptProfile, modelID: String, contextPack: ContextPack, deterministicText: String) -> LLMCacheKey {
         LLMCacheKey(
             profileID: profile.id,
@@ -297,15 +323,24 @@ private final class FakeRecordStore: TranscriptRecordStoreProtocol {
             transcriptHash: "transcript"
         )
     }
+    func fetchDictionaryEntries() -> [DictionaryEntryRecord] { [] }
+    func replaceDictionaryEntries(_ entries: [GlossaryEntry]) {}
+    func upsertDictionaryEntry(from: String, to: String, note: String?) {}
+    func fetchFolders() -> [FolderRecord] { [] }
+    func fetchNotes(limit: Int) -> [NoteRecord] { [] }
+    func fetchActions(limit: Int) -> [ActionRecord] { [] }
 }
 
 private final class FakeInsertionService: InsertionServiceProtocol {
     private(set) var insertedTexts: [String] = []
     private(set) var lastTarget: InsertionTarget?
+    private(set) var lastRequiresFrozenTarget = false
 
-    func insert(text: String, autoPaste: Bool, target: InsertionTarget?) throws {
+    func insert(text: String, autoPaste: Bool, target: InsertionTarget?, requiresFrozenTarget: Bool) -> InsertionResult {
         insertedTexts.append(text)
         lastTarget = target
+        lastRequiresFrozenTarget = requiresFrozenTarget
+        return autoPaste ? .pasted : .copiedOnly(reason: .autoPasteDisabled)
     }
 }
 

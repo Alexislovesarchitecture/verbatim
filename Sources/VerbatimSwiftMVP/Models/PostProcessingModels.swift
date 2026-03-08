@@ -359,8 +359,12 @@ struct PromptProfile: Codable, Identifiable, Sendable {
         return object.mapValues { $0.toAnyValue() }
     }
 
-    static func automaticStyleProfile(for category: StyleCategory, settings: RefineSettings) -> PromptProfile {
-        let preset = settings.preset(for: category)
+    static func automaticStyleProfile(
+        for category: StyleCategory,
+        presetOverride: StylePreset? = nil,
+        settings: RefineSettings
+    ) -> PromptProfile {
+        let preset = category.resolvedPreset(presetOverride ?? settings.preset(for: category))
         let definition = category.presetDefinition(for: preset, emailSignatureName: settings.emailSignatureName)
 
         return PromptProfile(
@@ -483,6 +487,7 @@ struct TranscriptRecord: Codable, Sendable {
     let createdAt: Date
     let rawText: String
     let deterministicText: String
+    let finalText: String?
     let llmText: String?
     let llmJSON: String?
     let llmStatus: LLMResultStatus?
@@ -496,6 +501,115 @@ struct TranscriptRecord: Codable, Sendable {
     let activeAppName: String
     let bundleID: String
     let styleCategory: StyleCategory
+    let stylePreset: StylePreset?
+    let windowTitle: String?
+    let focusedElementRole: String?
+    let insertionOutcome: InsertionOutcome?
+
+    init(
+        createdAt: Date,
+        rawText: String,
+        deterministicText: String,
+        finalText: String? = nil,
+        llmText: String?,
+        llmJSON: String?,
+        llmStatus: LLMResultStatus?,
+        validationStatus: LLMValidationStatus?,
+        profileID: String?,
+        profileVersion: Int?,
+        modelID: String?,
+        tokens: Int?,
+        cachedTokens: Int?,
+        latencyMs: Int?,
+        activeAppName: String,
+        bundleID: String,
+        styleCategory: StyleCategory,
+        stylePreset: StylePreset? = nil,
+        windowTitle: String? = nil,
+        focusedElementRole: String? = nil,
+        insertionOutcome: InsertionOutcome? = nil
+    ) {
+        self.createdAt = createdAt
+        self.rawText = rawText
+        self.deterministicText = deterministicText
+        self.finalText = finalText
+        self.llmText = llmText
+        self.llmJSON = llmJSON
+        self.llmStatus = llmStatus
+        self.validationStatus = validationStatus
+        self.profileID = profileID
+        self.profileVersion = profileVersion
+        self.modelID = modelID
+        self.tokens = tokens
+        self.cachedTokens = cachedTokens
+        self.latencyMs = latencyMs
+        self.activeAppName = activeAppName
+        self.bundleID = bundleID
+        self.styleCategory = styleCategory
+        self.stylePreset = stylePreset
+        self.windowTitle = windowTitle
+        self.focusedElementRole = focusedElementRole
+        self.insertionOutcome = insertionOutcome
+    }
+}
+
+enum InsertionOutcome: String, Codable, Sendable {
+    case inserted
+    case copiedOnly = "copied_only"
+    case copiedOnlyNeedsPermission = "copied_only_needs_permission"
+    case failed
+}
+
+struct DictionaryEntryRecord: Codable, Identifiable, Sendable {
+    let id: Int64
+    let from: String
+    let to: String
+    let note: String?
+    let createdAt: Date
+    let updatedAt: Date
+    let archived: Bool
+
+    var glossaryEntry: GlossaryEntry {
+        GlossaryEntry(from: from, to: to)
+    }
+}
+
+struct FolderRecord: Codable, Identifiable, Sendable {
+    let id: Int64
+    let name: String
+    let createdAt: Date
+    let updatedAt: Date
+    let archived: Bool
+}
+
+struct NoteRecord: Codable, Identifiable, Sendable {
+    let id: Int64
+    let folderID: Int64?
+    let transcriptionID: Int64?
+    let title: String?
+    let body: String
+    let createdAt: Date
+    let updatedAt: Date
+    let archived: Bool
+}
+
+enum ActionStatus: String, Codable, Sendable {
+    case open
+    case completed
+    case archived
+}
+
+struct ActionRecord: Codable, Identifiable, Sendable {
+    let id: Int64
+    let folderID: Int64?
+    let noteID: Int64?
+    let transcriptionID: Int64?
+    let title: String
+    let status: ActionStatus
+    let dueAt: Date?
+    let createdAt: Date
+    let updatedAt: Date
+    let archived: Bool
 }
 
 struct ActionItemsPayload: Codable, Sendable {
@@ -665,7 +779,7 @@ struct RefineSettings: Codable, Sendable {
     }
 }
 
-struct ActiveAppContext: Sendable {
+struct ActiveAppContext: Sendable, Equatable {
     let appName: String
     let bundleID: String
     let processIdentifier: Int32?
@@ -719,5 +833,61 @@ protocol LLMFormatterServiceProtocol {
 }
 
 protocol InsertionServiceProtocol {
-    func insert(text: String, autoPaste: Bool, target: InsertionTarget?) throws
+    func insert(text: String, autoPaste: Bool, target: InsertionTarget?, requiresFrozenTarget: Bool) -> InsertionResult
+}
+
+protocol TranscriptionStoreProtocol: AnyObject {
+    func appendRecord(_ record: TranscriptRecord)
+    func fetchRecentRecords(limit: Int) -> [TranscriptRecord]
+    func appendDiagnosticSession(_ record: DiagnosticSessionRecord)
+    func fetchRecentDiagnosticSessions(limit: Int) -> [DiagnosticSessionRecord]
+    func fetchDiagnosticSessionSummary(limit: Int) -> DiagnosticSessionSummary
+}
+
+protocol LLMCacheStoreProtocol: AnyObject {
+    func fetchCachedResult(for key: LLMCacheKey) -> LLMResult?
+    func saveCachedResult(_ result: LLMResult, for key: LLMCacheKey)
+    func makeCacheKey(profile: PromptProfile, modelID: String, contextPack: ContextPack, deterministicText: String) -> LLMCacheKey
+}
+
+protocol DictionaryStoreProtocol: AnyObject {
+    func fetchDictionaryEntries() -> [DictionaryEntryRecord]
+    func replaceDictionaryEntries(_ entries: [GlossaryEntry])
+    func upsertDictionaryEntry(from: String, to: String, note: String?)
+}
+
+protocol WorkspaceStoreProtocol: AnyObject {
+    func fetchFolders() -> [FolderRecord]
+    func fetchNotes(limit: Int) -> [NoteRecord]
+    func fetchActions(limit: Int) -> [ActionRecord]
+    @discardableResult
+    func upsertFolder(id: Int64?, name: String, archived: Bool) -> Int64?
+    @discardableResult
+    func saveNote(id: Int64?, folderID: Int64?, transcriptionID: Int64?, title: String?, body: String, archived: Bool) -> Int64?
+    @discardableResult
+    func saveAction(id: Int64?, folderID: Int64?, noteID: Int64?, transcriptionID: Int64?, title: String, status: ActionStatus, dueAt: Date?, archived: Bool) -> Int64?
+}
+
+protocol AppDatabaseProtocol: AnyObject, TranscriptionStoreProtocol, LLMCacheStoreProtocol, DictionaryStoreProtocol, WorkspaceStoreProtocol {}
+protocol TranscriptRecordStoreProtocol: AppDatabaseProtocol {}
+
+extension TranscriptionStoreProtocol {
+    func appendDiagnosticSession(_ record: DiagnosticSessionRecord) {}
+    func fetchRecentDiagnosticSessions(limit: Int) -> [DiagnosticSessionRecord] { [] }
+    func fetchDiagnosticSessionSummary(limit: Int) -> DiagnosticSessionSummary { .empty }
+}
+
+extension DictionaryStoreProtocol {
+    func fetchDictionaryEntries() -> [DictionaryEntryRecord] { [] }
+    func replaceDictionaryEntries(_ entries: [GlossaryEntry]) {}
+    func upsertDictionaryEntry(from: String, to: String, note: String?) {}
+}
+
+extension WorkspaceStoreProtocol {
+    func fetchFolders() -> [FolderRecord] { [] }
+    func fetchNotes(limit: Int) -> [NoteRecord] { [] }
+    func fetchActions(limit: Int) -> [ActionRecord] { [] }
+    func upsertFolder(id: Int64?, name: String, archived: Bool) -> Int64? { nil }
+    func saveNote(id: Int64?, folderID: Int64?, transcriptionID: Int64?, title: String?, body: String, archived: Bool) -> Int64? { nil }
+    func saveAction(id: Int64?, folderID: Int64?, noteID: Int64?, transcriptionID: Int64?, title: String, status: ActionStatus, dueAt: Date?, archived: Bool) -> Int64? { nil }
 }

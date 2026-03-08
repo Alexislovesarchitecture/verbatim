@@ -953,6 +953,9 @@ struct ContentView: View {
                 .pickerStyle(.segmented)
             }
 
+            Toggle("Skip silent hotkey recordings", isOn: $viewModel.interactionSettings.silenceDetectionEnabled)
+            Toggle("Lock target app at start", isOn: $viewModel.interactionSettings.lockTargetAtStart)
+
             if viewModel.isCapturingHotkey {
                 Text("Press any key combination, or use Fn / Globe directly.")
                     .font(.caption)
@@ -971,11 +974,21 @@ struct ContentView: View {
 
             Toggle("Show listening indicator", isOn: $viewModel.interactionSettings.showListeningIndicator)
             Toggle("Play start/stop sound cues", isOn: $viewModel.interactionSettings.playSoundCues)
+
+            Picker("Insertion mode", selection: $viewModel.interactionSettings.insertionMode) {
+                ForEach(RecordingInsertionMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+
             Toggle("Auto-paste after insert", isOn: $viewModel.interactionSettings.autoPasteAfterInsert)
+                .disabled(viewModel.interactionSettings.insertionMode != .autoPasteWhenPossible)
+            Toggle("Show permission warnings", isOn: $viewModel.interactionSettings.showPermissionWarnings)
 
             Text(viewModel.hotkeyStatusMessage)
                 .font(.caption)
-                .foregroundStyle(viewModel.hotkeyPermissionGranted ? VerbatimPalette.mutedInk : Color.orange)
+                .foregroundStyle(viewModel.shouldShowPermissionWarning ? Color.orange : VerbatimPalette.mutedInk)
         }
         .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
     }
@@ -987,9 +1000,17 @@ struct ContentView: View {
                 subtitle: "Fn / Globe hotkeys and insertion need Accessibility access."
             )
 
+            Text(viewModel.accessibilityPermissionStateDescription)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(viewModel.shouldShowPermissionWarning ? Color.orange : VerbatimPalette.ink)
+
             Text("Prompt macOS for access, then enable Verbatim in System Settings > Privacy & Security > Accessibility.")
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
+
+            Text(viewModel.accessibilityPermissionHelpText)
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
 
             Button("Prompt Accessibility Access") {
                 viewModel.requestAccessibilityPermissionPrompt()
@@ -1030,6 +1051,51 @@ struct ContentView: View {
             Text("Switch to Remote when you want OpenAI transcription models and their richer feature set.")
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Whisper runtime")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+
+                Text(viewModel.localTranscriptionRuntimeStatusMessage)
+                    .font(.caption)
+                    .foregroundStyle(viewModel.isLocalTranscriptionRuntimeStatusError ? Color.orange : VerbatimPalette.mutedInk)
+
+                if let systemInfo = viewModel.whisperRuntimeSystemInfoSummary,
+                   viewModel.selectedLocalModel.backend == .whisperCpp {
+                    Text(systemInfo)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+                }
+
+                HStack(spacing: 10) {
+                    Button("Check Whisper runtime", systemImage: "bolt.badge.checkmark") {
+                        viewModel.refreshWhisperRuntime()
+                    }
+                    .applyGlassButtonStyle()
+
+                    if let actionTitle = viewModel.selectedLocalModelPrimaryActionTitle {
+                        Button(actionTitle, systemImage: "arrow.down.circle") {
+                            viewModel.downloadSelectedLocalWhisperModel()
+                        }
+                        .applyGlassButtonStyle(prominent: true)
+                        .disabled(!viewModel.canDownloadSelectedLocalWhisperModel || isBusy)
+                    }
+
+                    if viewModel.canRemoveSelectedLocalWhisperModel {
+                        Button("Remove model", systemImage: "trash") {
+                            viewModel.removeSelectedLocalWhisperModel()
+                        }
+                        .applyGlassButtonStyle()
+                        .disabled(isBusy)
+                    }
+                }
+            }
+            .applyInsetWellStyle(cornerRadius: 24, padding: 18)
+
+            Text(viewModel.selectedLocalModelSecondaryNote)
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
         }
         .applyLiquidCardStyle(cornerRadius: 28, tone: .cream, padding: 22)
     }
@@ -1103,14 +1169,14 @@ struct ContentView: View {
                                     title: model.title,
                                     subtitle: model.detail,
                                     isSelected: viewModel.selectedLocalModel == model,
-                                    badgeText: model.isImplemented ? "Ready" : "Soon",
-                                    isAvailable: model.isImplemented,
-                                    notes: model.isImplemented ? "" : "Coming soon",
+                                    badgeText: viewModel.localModelBadgeText(model),
+                                    isAvailable: viewModel.isLocalModelSelectable(model),
+                                    notes: viewModel.localModelNotes(model),
                                     accent: .amber
                                 )
                             }
                             .buttonStyle(.plain)
-                            .disabled(isBusy)
+                            .disabled(isBusy || !viewModel.isLocalModelSelectable(model))
                         }
                     }
                 }
@@ -1534,7 +1600,7 @@ struct ContentView: View {
 
     private var filteredDictionaryEntries: [GlossaryEntry] {
         let query = dictionarySearchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let filtered = viewModel.refineSettings.glossary.filter { entry in
+        let filtered = viewModel.dictionaryEntries.filter { entry in
             guard !query.isEmpty else { return true }
             return entry.from.lowercased().contains(query) || entry.to.lowercased().contains(query)
         }
@@ -1591,14 +1657,7 @@ struct ContentView: View {
         guard !from.isEmpty, !to.isEmpty else { return }
 
         let newEntry = GlossaryEntry(from: from, to: to)
-        if let existingIndex = viewModel.refineSettings.glossary.firstIndex(where: {
-            $0.from.caseInsensitiveCompare(from) == .orderedSame
-        }) {
-            viewModel.refineSettings.glossary[existingIndex] = newEntry
-        } else {
-            viewModel.refineSettings.glossary.append(newEntry)
-        }
-
+        viewModel.upsertDictionaryEntry(from: newEntry.from, to: newEntry.to)
         closeDictionaryAddFlow()
     }
 
@@ -1634,7 +1693,7 @@ struct ContentView: View {
     private var glossaryMappingsBinding: Binding<String> {
         Binding(
             get: {
-                viewModel.refineSettings.glossary
+                viewModel.dictionaryEntries
                     .map { "\($0.from)=>\($0.to)" }
                     .joined(separator: "\n")
             },
@@ -1651,7 +1710,7 @@ struct ContentView: View {
                         guard !from.isEmpty, !to.isEmpty else { return nil }
                         return GlossaryEntry(from: from, to: to)
                     }
-                viewModel.refineSettings.glossary = parsed
+                viewModel.replaceDictionaryEntries(parsed)
             }
         )
     }

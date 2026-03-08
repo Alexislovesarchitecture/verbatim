@@ -6,74 +6,119 @@ import ApplicationServices
 import UIKit
 #endif
 
-enum InsertionError: LocalizedError {
-    case emptyText
-    case accessibilityPermissionRequired
+final class ClipboardInsertionService: InsertionServiceProtocol {
+#if canImport(AppKit)
+    struct AppKitHooks {
+        var writeToPasteboard: (String) -> Bool
+        var hasAccessibilityPermission: () -> Bool
+        var restoreTargetApplication: (InsertionTarget) -> TargetRestoreOutcome
+        var performPaste: () -> Bool
 
-    var errorDescription: String? {
-        switch self {
-        case .emptyText:
-            return "Cannot insert empty text."
-        case .accessibilityPermissionRequired:
-            return "Enable Accessibility access for Verbatim to auto-paste into the active app."
+        static let live = AppKitHooks(
+            writeToPasteboard: { text in
+                NSPasteboard.general.clearContents()
+                return NSPasteboard.general.setString(text, forType: .string)
+            },
+            hasAccessibilityPermission: {
+                AXIsProcessTrusted()
+            },
+            restoreTargetApplication: { target in
+                restoreTargetApplicationLive(target)
+            },
+            performPaste: {
+                performPasteLive()
+            }
+        )
+
+        private static func restoreTargetApplicationLive(_ target: InsertionTarget) -> TargetRestoreOutcome {
+            let runningApp: NSRunningApplication?
+            if let pid = target.processIdentifier, pid > 0 {
+                runningApp = NSRunningApplication(processIdentifier: pid)
+            } else {
+                runningApp = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == target.bundleID }
+            }
+
+            guard let runningApp else {
+                return .missingTargetApplication
+            }
+
+            if runningApp.isActive {
+                return .restored
+            }
+
+            let didActivate = runningApp.activate()
+            Thread.sleep(forTimeInterval: 0.12)
+            return didActivate && runningApp.isActive ? .restored : .activationFailed
+        }
+
+        private static func performPasteLive() -> Bool {
+            let source = CGEventSource(stateID: .hidSystemState)
+            guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
+                  let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
+                return false
+            }
+
+            keyDown.flags = .maskCommand
+            keyUp.flags = .maskCommand
+            keyDown.post(tap: .cghidEventTap)
+            keyUp.post(tap: .cghidEventTap)
+            return true
         }
     }
-}
 
-final class ClipboardInsertionService: InsertionServiceProtocol {
-    func insert(text: String, autoPaste: Bool, target: InsertionTarget? = nil) throws {
+    enum TargetRestoreOutcome {
+        case restored
+        case missingTargetApplication
+        case activationFailed
+    }
+
+    private let hooks: AppKitHooks
+
+    init(hooks: AppKitHooks = .live) {
+        self.hooks = hooks
+    }
+#else
+    init() {}
+#endif
+
+    func insert(text: String, autoPaste: Bool, target: InsertionTarget?, requiresFrozenTarget: Bool) -> InsertionResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            throw InsertionError.emptyText
+            return .failed(reason: .emptyText)
         }
 
 #if canImport(AppKit)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(trimmed, forType: .string)
-        if autoPaste {
-            try pasteToApplication(target)
+        guard hooks.writeToPasteboard(trimmed) else {
+            return .failed(reason: .clipboardWriteFailed)
         }
-#elseif canImport(UIKit)
-        UIPasteboard.general.string = trimmed
-#endif
-    }
 
-#if canImport(AppKit)
-    private func pasteToApplication(_ target: InsertionTarget?) throws {
-        guard AXIsProcessTrusted() else {
-            throw InsertionError.accessibilityPermissionRequired
+        guard autoPaste else {
+            return .copiedOnly(reason: .autoPasteDisabled)
+        }
+
+        if requiresFrozenTarget, target == nil {
+            return .copiedOnly(reason: .missingInsertionTarget)
+        }
+
+        guard hooks.hasAccessibilityPermission() else {
+            return .copiedOnlyNeedsPermission
         }
 
         if let target {
-            restoreTargetApplication(target)
+            switch hooks.restoreTargetApplication(target) {
+            case .restored:
+                break
+            case .missingTargetApplication:
+                return .copiedOnly(reason: .invalidTargetApplication)
+            case .activationFailed:
+                return .copiedOnly(reason: .targetRestoreFailed)
+            }
         }
 
-        let source = CGEventSource(stateID: .hidSystemState)
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
-            return
-        }
-
-        keyDown.flags = .maskCommand
-        keyUp.flags = .maskCommand
-
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-    }
-
-    private func restoreTargetApplication(_ target: InsertionTarget) {
-        let runningApp: NSRunningApplication?
-        if let pid = target.processIdentifier, pid > 0 {
-            runningApp = NSRunningApplication(processIdentifier: pid)
-        } else {
-            runningApp = NSWorkspace.shared.runningApplications.first { $0.bundleIdentifier == target.bundleID }
-        }
-
-        guard let runningApp else { return }
-        if !runningApp.isActive {
-            runningApp.activate()
-            Thread.sleep(forTimeInterval: 0.12)
-        }
-    }
+        return hooks.performPaste() ? .pasted : .copiedOnly(reason: .pasteFailed)
+#elseif canImport(UIKit)
+        UIPasteboard.general.string = trimmed
+        return autoPaste ? .pasted : .copiedOnly(reason: .autoPasteDisabled)
 #endif
+    }
 }

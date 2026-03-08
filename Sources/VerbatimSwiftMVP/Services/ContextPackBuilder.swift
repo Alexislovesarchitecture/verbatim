@@ -5,16 +5,20 @@ final class ContextPackBuilder {
         activeContext: ActiveAppContext,
         logicSettings: LogicSettings,
         refineSettings: RefineSettings,
+        glossary: [GlossaryEntry],
+        presetOverride: StylePreset? = nil,
         deterministicText: String
     ) -> ContextPack {
-        let relevantGlossary = relevantGlossaryEntries(from: refineSettings.glossary, text: deterministicText)
+        let relevantGlossary = relevantGlossaryEntries(from: glossary, text: deterministicText)
         let sessionMemory = Array(
             refineSettings.sessionMemory
                 .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
                 .prefix(3)
         )
-        let preset = refineSettings.preset(for: activeContext.styleCategory)
+        let preset = activeContext.styleCategory.resolvedPreset(
+            presetOverride ?? refineSettings.preset(for: activeContext.styleCategory)
+        )
         let presetDefinition = activeContext.styleCategory.presetDefinition(
             for: preset,
             emailSignatureName: refineSettings.emailSignatureName

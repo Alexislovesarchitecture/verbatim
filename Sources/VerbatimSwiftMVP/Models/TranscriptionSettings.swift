@@ -146,18 +146,47 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .appleOnDevice:
             return "Built-in Apple Speech framework"
-        case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeV3:
-            return "Coming soon"
+        case .whisperTiny:
+            return "74 MB · Fastest, lowest accuracy"
+        case .whisperBase:
+            return "141 MB · Recommended balance"
+        case .whisperSmall:
+            return "465 MB · Better accuracy, slower"
+        case .whisperMedium:
+            return "1.43 GB · High accuracy, heavy"
+        case .whisperLargeV3:
+            return "2.88 GB · Best quality, largest download"
         }
     }
 
-    var isImplemented: Bool {
+    var backend: LocalTranscriptionBackend {
         switch self {
         case .appleOnDevice:
-            return true
+            return .appleSpeech
         case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeV3:
-            return false
+            return .whisperCpp
         }
+    }
+
+    var whisperModelName: String? {
+        switch self {
+        case .appleOnDevice:
+            return nil
+        case .whisperTiny:
+            return "tiny"
+        case .whisperBase:
+            return "base"
+        case .whisperSmall:
+            return "small"
+        case .whisperMedium:
+            return "medium"
+        case .whisperLargeV3:
+            return "large-v3"
+        }
+    }
+
+    var recommendedForFirstDownload: Bool {
+        self == .whisperBase
     }
 }
 
@@ -176,6 +205,25 @@ enum HotkeyTriggerMode: String, CaseIterable, Identifiable, Codable, Sendable {
             return "Tap to Toggle"
         case .doubleTapLock:
             return "Double Tap to Lock"
+        }
+    }
+}
+
+enum FunctionKeyFallbackMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case automatic
+    case ask
+    case disabled
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .ask:
+            return "Ask"
+        case .disabled:
+            return "Disabled"
         }
     }
 }
@@ -206,7 +254,38 @@ struct HotkeyBinding: Codable, Hashable, Sendable {
     }
 
     var isValidGlobalHotkey: Bool {
-        modifierKeyRawValue != nil || modifierFlagsRawValue != 0
+        validationResult.isValid
+    }
+
+    var usesFn: Bool {
+        modifierKeyRawValue == Self.functionModifierRawValue
+            || (modifierFlagsRawValue & Self.functionModifierRawValue != 0)
+    }
+
+    var hasNoOtherKeyOrModifier: Bool {
+        modifierKeyRawValue == Self.functionModifierRawValue && modifierFlagsRawValue == 0
+    }
+
+    var isModifierOnly: Bool {
+        modifierKeyRawValue != nil
+    }
+
+    var isModifierOnlyBinding: Bool {
+        modifierKeyRawValue != nil
+    }
+
+    var isFunctionOnlyBinding: Bool {
+        keyCode == Self.functionKeyCode
+            && modifierKeyRawValue == Self.functionModifierRawValue
+            && modifierFlagsRawValue == 0
+    }
+
+    var isStandardShortcutBinding: Bool {
+        modifierKeyRawValue == nil
+    }
+
+    var validationResult: HotkeyValidationResult {
+        HotkeyValidator().validate(self)
     }
 
     static var defaultFunctionKey: HotkeyBinding {
@@ -231,6 +310,15 @@ struct HotkeyBinding: Codable, Hashable, Sendable {
         HotkeyBinding(
             keyCode: spaceKeyCode,
             modifierFlagsRawValue: controlModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var controlOptionSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: controlModifierRawValue | optionModifierRawValue,
             keyDisplay: "Space",
             modifierKeyRawValue: nil
         )
@@ -281,6 +369,140 @@ struct HotkeyBinding: Codable, Hashable, Sendable {
         if rawValue & commandModifierRawValue != 0 { names.append("Command") }
         if rawValue & functionModifierRawValue != 0 { names.append("Fn") }
         return names
+    }
+
+    static let recommendedFallbacks: [HotkeyBinding] = [
+        .controlOptionSpace,
+        .optionSpace,
+        .commandShiftSpace
+    ]
+}
+
+enum HotkeyValidationIssue: Identifiable, Equatable, Sendable {
+    case noPrimaryKey
+    case modifierOnlyNotAllowed
+    case reservedBySystem(String)
+    case fnOnlyRequiresSpecialHandling
+    case likelyConflict(String)
+    case awkwardModifierCombo(String)
+
+    var id: String {
+        switch self {
+        case .noPrimaryKey:
+            return "no_primary_key"
+        case .modifierOnlyNotAllowed:
+            return "modifier_only_not_allowed"
+        case .reservedBySystem(let message):
+            return "reserved_\(message)"
+        case .fnOnlyRequiresSpecialHandling:
+            return "fn_requires_special_handling"
+        case .likelyConflict(let message):
+            return "likely_conflict_\(message)"
+        case .awkwardModifierCombo(let message):
+            return "awkward_combo_\(message)"
+        }
+    }
+
+    var isBlocking: Bool {
+        switch self {
+        case .noPrimaryKey, .modifierOnlyNotAllowed, .reservedBySystem, .fnOnlyRequiresSpecialHandling:
+            return true
+        case .likelyConflict, .awkwardModifierCombo:
+            return false
+        }
+    }
+
+    var message: String {
+        switch self {
+        case .noPrimaryKey:
+            return "Choose a real key combination or Fn by itself."
+        case .modifierOnlyNotAllowed:
+            return "Modifier-only hotkeys are not supported unless the key is Fn."
+        case .reservedBySystem(let description):
+            return description
+        case .fnOnlyRequiresSpecialHandling:
+            return "This Fn combination is not supported for global capture."
+        case .likelyConflict(let description):
+            return description
+        case .awkwardModifierCombo(let description):
+            return description
+        }
+    }
+}
+
+struct HotkeyValidationResult: Equatable, Sendable {
+    let issues: [HotkeyValidationIssue]
+
+    var blockingIssues: [HotkeyValidationIssue] {
+        issues.filter(\.isBlocking)
+    }
+
+    var warnings: [HotkeyValidationIssue] {
+        issues.filter { !$0.isBlocking }
+    }
+
+    var isValid: Bool {
+        blockingIssues.isEmpty
+    }
+}
+
+struct HotkeyValidator: Sendable {
+    func validate(_ binding: HotkeyBinding) -> HotkeyValidationResult {
+        var issues: [HotkeyValidationIssue] = []
+
+        if binding.keyDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            issues.append(.noPrimaryKey)
+        }
+
+        if binding.isModifierOnly && binding.modifierKeyRawValue != HotkeyBinding.functionModifierRawValue {
+            issues.append(.modifierOnlyNotAllowed)
+        }
+
+        if binding.usesFn && !binding.hasNoOtherKeyOrModifier && binding.isModifierOnly == false {
+            issues.append(.fnOnlyRequiresSpecialHandling)
+        }
+
+        if binding.keyCode == HotkeyBinding.spaceKeyCode {
+            switch binding.modifierFlagsRawValue {
+            case HotkeyBinding.commandModifierRawValue:
+                issues.append(.reservedBySystem("Command + Space is reserved by macOS."))
+            case HotkeyBinding.controlModifierRawValue:
+                issues.append(.reservedBySystem("Control + Space is commonly reserved by input-source switching."))
+            case HotkeyBinding.optionModifierRawValue:
+                issues.append(.likelyConflict("Option + Space often conflicts with app-level shortcuts."))
+            case HotkeyBinding.commandModifierRawValue | HotkeyBinding.shiftModifierRawValue:
+                issues.append(.likelyConflict("Command + Shift + Space can conflict with app or system shortcuts."))
+            default:
+                break
+            }
+        }
+
+        if binding.keyDisplay == "Tab", binding.modifierFlagsRawValue == HotkeyBinding.commandModifierRawValue {
+            issues.append(.reservedBySystem("Command + Tab is reserved by app switching."))
+        }
+
+        let modifierCount = Self.modifierCount(for: binding.modifierFlagsRawValue)
+            + (binding.modifierKeyRawValue == nil ? 0 : 1)
+        if modifierCount >= 3 {
+            issues.append(.awkwardModifierCombo("This shortcut uses many modifiers and may be awkward to hold reliably."))
+        }
+
+        return HotkeyValidationResult(issues: issues)
+    }
+
+    private static func modifierCount(for rawValue: UInt) -> Int {
+        let values = [
+            HotkeyBinding.commandModifierRawValue,
+            HotkeyBinding.optionModifierRawValue,
+            HotkeyBinding.controlModifierRawValue,
+            HotkeyBinding.shiftModifierRawValue,
+            HotkeyBinding.functionModifierRawValue
+        ]
+        return values.reduce(into: 0) { count, value in
+            if rawValue & value != 0 {
+                count += 1
+            }
+        }
     }
 }
 
@@ -377,18 +599,34 @@ struct InteractionSettings: Codable, Sendable {
     var hotkeyEnabled: Bool = false
     var hotkeyTriggerMode: HotkeyTriggerMode = .holdToTalk
     var hotkeyBinding: HotkeyBinding = .defaultFunctionKey
+    var functionKeyFallbackMode: FunctionKeyFallbackMode = .automatic
+    var silenceDetectionEnabled: Bool = true
+    var silenceSensitivity: SilenceSensitivity = .normal
+    var alwaysTranscribeShortRecordings: Bool = false
+    var lockTargetAtStart: Bool = true
     var showListeningIndicator: Bool = true
     var playSoundCues: Bool = false
     var autoPasteAfterInsert: Bool = true
+    var insertionMode: RecordingInsertionMode = .autoPasteWhenPossible
+    var showPermissionWarnings: Bool = true
+    var clipboardRestoreMode: ClipboardRestoreMode = .manualOnly
 
     private enum CodingKeys: String, CodingKey {
         case hotkeyEnabled
         case hotkeyTriggerMode
         case hotkeyBinding
         case hotkeyPreset
+        case functionKeyFallbackMode
+        case silenceDetectionEnabled
+        case silenceSensitivity
+        case alwaysTranscribeShortRecordings
+        case lockTargetAtStart
         case showListeningIndicator
         case playSoundCues
         case autoPasteAfterInsert
+        case insertionMode
+        case showPermissionWarnings
+        case clipboardRestoreMode
     }
 
     init() {}
@@ -397,9 +635,17 @@ struct InteractionSettings: Codable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         hotkeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .hotkeyEnabled) ?? false
         hotkeyTriggerMode = try container.decodeIfPresent(HotkeyTriggerMode.self, forKey: .hotkeyTriggerMode) ?? .holdToTalk
+        functionKeyFallbackMode = try container.decodeIfPresent(FunctionKeyFallbackMode.self, forKey: .functionKeyFallbackMode) ?? .automatic
+        silenceDetectionEnabled = try container.decodeIfPresent(Bool.self, forKey: .silenceDetectionEnabled) ?? true
+        silenceSensitivity = try container.decodeIfPresent(SilenceSensitivity.self, forKey: .silenceSensitivity) ?? .normal
+        alwaysTranscribeShortRecordings = try container.decodeIfPresent(Bool.self, forKey: .alwaysTranscribeShortRecordings) ?? false
+        lockTargetAtStart = try container.decodeIfPresent(Bool.self, forKey: .lockTargetAtStart) ?? true
         showListeningIndicator = try container.decodeIfPresent(Bool.self, forKey: .showListeningIndicator) ?? true
         playSoundCues = try container.decodeIfPresent(Bool.self, forKey: .playSoundCues) ?? false
         autoPasteAfterInsert = try container.decodeIfPresent(Bool.self, forKey: .autoPasteAfterInsert) ?? true
+        insertionMode = try container.decodeIfPresent(RecordingInsertionMode.self, forKey: .insertionMode) ?? .autoPasteWhenPossible
+        showPermissionWarnings = try container.decodeIfPresent(Bool.self, forKey: .showPermissionWarnings) ?? true
+        clipboardRestoreMode = try container.decodeIfPresent(ClipboardRestoreMode.self, forKey: .clipboardRestoreMode) ?? .manualOnly
 
         if let binding = try container.decodeIfPresent(HotkeyBinding.self, forKey: .hotkeyBinding) {
             hotkeyBinding = binding
@@ -415,8 +661,16 @@ struct InteractionSettings: Codable, Sendable {
         try container.encode(hotkeyEnabled, forKey: .hotkeyEnabled)
         try container.encode(hotkeyTriggerMode, forKey: .hotkeyTriggerMode)
         try container.encode(hotkeyBinding, forKey: .hotkeyBinding)
+        try container.encode(functionKeyFallbackMode, forKey: .functionKeyFallbackMode)
+        try container.encode(silenceDetectionEnabled, forKey: .silenceDetectionEnabled)
+        try container.encode(silenceSensitivity, forKey: .silenceSensitivity)
+        try container.encode(alwaysTranscribeShortRecordings, forKey: .alwaysTranscribeShortRecordings)
+        try container.encode(lockTargetAtStart, forKey: .lockTargetAtStart)
         try container.encode(showListeningIndicator, forKey: .showListeningIndicator)
         try container.encode(playSoundCues, forKey: .playSoundCues)
         try container.encode(autoPasteAfterInsert, forKey: .autoPasteAfterInsert)
+        try container.encode(insertionMode, forKey: .insertionMode)
+        try container.encode(showPermissionWarnings, forKey: .showPermissionWarnings)
+        try container.encode(clipboardRestoreMode, forKey: .clipboardRestoreMode)
     }
 }
