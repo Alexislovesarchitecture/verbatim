@@ -36,6 +36,18 @@ enum WhisperRuntimeLoadState: Equatable {
     case error(String)
 }
 
+enum WhisperKitServerLoadState: Equatable {
+    case idle
+    case checking
+    case ready
+    case error(String)
+}
+
+enum LocalWhisperInstallStateDescription: Equatable {
+    case none
+    case progress(String)
+}
+
 enum AppAppearanceMode: String, CaseIterable, Identifiable {
     case auto
     case light
@@ -146,9 +158,27 @@ final class TranscriptionViewModel: ObservableObject {
     @Published var selectedLocalModel: LocalTranscriptionModel = .appleOnDevice {
         didSet {
             UserDefaults.standard.set(selectedLocalModel.rawValue, forKey: Self.savedLocalModelDefaultsKey)
-            if selectedLocalModel.backend == .whisperCpp {
+            if selectedLocalModel.isWhisperModel {
                 refreshWhisperRuntime()
             }
+        }
+    }
+    @Published var selectedLocalEngineMode: LocalTranscriptionEngineMode = .appleSpeech {
+        didSet {
+            UserDefaults.standard.set(selectedLocalEngineMode.rawValue, forKey: Self.savedLocalEngineModeDefaultsKey)
+            if selectedLocalEngineMode != .appleSpeech {
+                refreshWhisperRuntime()
+            }
+        }
+    }
+    @Published var selectedWhisperServerConnectionMode: WhisperKitServerConnectionMode = .managedHelper {
+        didSet {
+            UserDefaults.standard.set(selectedWhisperServerConnectionMode.rawValue, forKey: Self.savedWhisperServerConnectionModeDefaultsKey)
+        }
+    }
+    @Published var whisperServerBaseURL: String = "" {
+        didSet {
+            UserDefaults.standard.set(whisperServerBaseURL, forKey: Self.savedWhisperServerBaseURLDefaultsKey)
         }
     }
 
@@ -213,10 +243,16 @@ final class TranscriptionViewModel: ObservableObject {
     @Published private(set) var whisperRuntimeLoadState: WhisperRuntimeLoadState = .idle
     @Published private(set) var whisperRuntimeStatus: WhisperRuntimeStatus = WhisperRuntimeStatus(
         isSupported: false,
-        systemInfo: nil,
-        message: "Local Whisper not checked yet."
+        message: "Whisper not checked yet."
     )
     @Published private(set) var whisperModelInstallStates: [LocalTranscriptionModel: WhisperModelInstallState] = [:]
+    @Published private(set) var legacyWhisperInstallStates: [LocalTranscriptionModel: WhisperModelInstallState] = [:]
+    @Published private(set) var legacyWhisperRuntimeStatus: WhisperRuntimeStatus = WhisperRuntimeStatus(
+        isSupported: false,
+        message: "Legacy Whisper not checked yet."
+    )
+    @Published private(set) var whisperKitServerLoadState: WhisperKitServerLoadState = .idle
+    @Published private(set) var whisperKitServerStatus: WhisperKitServerStatus = .idle
     @Published private(set) var remoteLogicModels: [ModelAvailabilityRow] = []
     @Published private(set) var localLogicModels: [ModelAvailabilityRow] = []
     @Published private(set) var localLogicRuntimeLoadState: LocalLogicRuntimeLoadState = .idle
@@ -271,6 +307,9 @@ final class TranscriptionViewModel: ObservableObject {
     private let postTranscriptionPipeline: PostTranscriptionPipeline
     private let activeAppContextService: ActiveAppContextServiceProtocol
     private let whisperModelManager: WhisperModelManager
+    private let whisperKitModelManager: WhisperKitModelManager
+    private let whisperKitServerManager: WhisperKitServerManager
+    private let managedLocalTranscriptionService: ManagedLocalTranscriptionService?
     private let insertionService: InsertionServiceProtocol
     private let globalHotkeyService: GlobalHotkeyServiceProtocol
     private let listeningIndicatorService: ListeningIndicatorServiceProtocol
@@ -282,6 +321,7 @@ final class TranscriptionViewModel: ObservableObject {
     private var hasRequestedAccessibilityPrompt = false
     private var shouldForceInsertionForCurrentRecording = false
     private var activeRecordingSessionContext: RecordingSessionContext?
+    private var activeLocalModelLifecycleState: String?
     private var activeHotkeyStartResult: HotkeyStartResult?
     private var hotkeyTestTask: Task<Void, Never>?
     private var isRunningHotkeyTest = false
@@ -293,6 +333,9 @@ final class TranscriptionViewModel: ObservableObject {
     private static let savedTranscriptionModeDefaultsKey = "VerbatimSwiftMVP.TranscriptionMode"
     private static let savedRemoteModelDefaultsKey = "VerbatimSwiftMVP.RemoteModelID"
     private static let savedLocalModelDefaultsKey = "VerbatimSwiftMVP.LocalModelID"
+    private static let savedLocalEngineModeDefaultsKey = "VerbatimSwiftMVP.LocalEngineMode"
+    private static let savedWhisperServerConnectionModeDefaultsKey = "VerbatimSwiftMVP.WhisperServerConnectionMode"
+    private static let savedWhisperServerBaseURLDefaultsKey = "VerbatimSwiftMVP.WhisperServerBaseURL"
     private static let savedSectionDefaultsKey = "VerbatimSwiftMVP.SelectedSection"
     private static let savedShowAdvancedRemoteModelsDefaultsKey = "VerbatimSwiftMVP.ShowAdvancedRemoteModels"
     private static let savedLogicModeDefaultsKey = "VerbatimSwiftMVP.LogicMode"
@@ -320,6 +363,8 @@ final class TranscriptionViewModel: ObservableObject {
         transcriptionService: TranscriptionServiceProtocol = OpenAITranscriptionService(),
         localTranscriptionService: LocalTranscriptionServiceProtocol? = nil,
         whisperModelManager: WhisperModelManager? = nil,
+        whisperKitModelManager: WhisperKitModelManager? = nil,
+        whisperKitServerManager: WhisperKitServerManager? = nil,
         logicService: OpenAILogicService = OpenAILogicService(),
         localLogicService: OllamaLocalLogicService = OllamaLocalLogicService(),
         modelCatalogService: ModelCatalogServiceProtocol? = nil,
@@ -337,9 +382,18 @@ final class TranscriptionViewModel: ObservableObject {
         soundCueService: SoundCueServiceProtocol = SoundCueService()
     ) {
         let resolvedWhisperModelManager = whisperModelManager ?? WhisperModelManager()
+        let resolvedWhisperKitModelManager = whisperKitModelManager ?? WhisperKitModelManager()
+        let resolvedWhisperKitServerManager = whisperKitServerManager ?? WhisperKitServerManager()
+        let routeTracker = LocalTranscriptionRouteTracker()
         let resolvedLocalTranscriptionService = localTranscriptionService
             ?? ManagedLocalTranscriptionService(
-                whisperService: WhisperLocalTranscriptionService(modelManager: resolvedWhisperModelManager)
+                whisperKitService: WhisperKitLocalTranscriptionService(
+                    modelManager: resolvedWhisperKitModelManager,
+                    routeTracker: routeTracker
+                ),
+                whisperService: WhisperLocalTranscriptionService(modelManager: resolvedWhisperModelManager),
+                whisperCppModelManager: resolvedWhisperModelManager,
+                routeTracker: routeTracker
             )
         let formatterRouter = LLMFormatterRouter(
             remoteService: logicService,
@@ -360,6 +414,9 @@ final class TranscriptionViewModel: ObservableObject {
         self.transcriptRecordStore = transcriptRecordStore
         self.activeAppContextService = activeAppContextService
         self.whisperModelManager = resolvedWhisperModelManager
+        self.whisperKitModelManager = resolvedWhisperKitModelManager
+        self.whisperKitServerManager = resolvedWhisperKitServerManager
+        self.managedLocalTranscriptionService = resolvedLocalTranscriptionService as? ManagedLocalTranscriptionService
         self.postTranscriptionPipeline = postTranscriptionPipeline
             ?? PostTranscriptionPipeline(
                 transcriptIntentResolver: transcriptIntentResolver,
@@ -485,11 +542,17 @@ final class TranscriptionViewModel: ObservableObject {
         case .remote:
             return effectiveApiKey != nil && selectedTranscriptionModel != nil && isSelectedRemoteModelAvailable
         case .local:
-            switch selectedLocalModel.backend {
+            switch selectedLocalEngineMode {
             case .appleSpeech:
                 return true
-            case .whisperCpp:
-                return whisperRuntimeStatus.isAvailable && localWhisperInstallState(for: selectedLocalModel).isInstalled
+            case .whisperKit:
+                return selectedLocalModel.isWhisperModel
+                    && whisperRuntimeStatus.isAvailable
+                    && localWhisperInstallState(for: selectedLocalModel).isReady
+            case .legacyWhisper:
+                return selectedLocalModel.isWhisperModel
+                    && legacyWhisperRuntimeStatus.isAvailable
+                    && legacyWhisperInstallState(for: selectedLocalModel).isReady
             }
         }
     }
@@ -617,85 +680,42 @@ final class TranscriptionViewModel: ObservableObject {
     }
 
     var localTranscriptionRuntimeStatusMessage: String {
-        switch selectedLocalModel.backend {
+        switch selectedLocalEngineMode {
         case .appleSpeech:
             return "Apple Speech is built into macOS."
-        case .whisperCpp:
-            switch whisperRuntimeLoadState {
-            case .idle:
-                return whisperRuntimeStatus.message
-            case .checking:
-                return "Checking Whisper runtime..."
-            case .ready:
-                return whisperRuntimeStatus.message
-            case .error(let message):
-                return message
-            }
+        case .whisperKit:
+            return whisperRuntimeStatus.message
+        case .legacyWhisper:
+            return legacyWhisperRuntimeStatus.message
         }
     }
 
     var isLocalTranscriptionRuntimeStatusError: Bool {
-        switch selectedLocalModel.backend {
+        switch selectedLocalEngineMode {
         case .appleSpeech:
             return false
-        case .whisperCpp:
+        case .whisperKit:
             if case .error = whisperRuntimeLoadState {
                 return true
             }
             return !whisperRuntimeStatus.isAvailable
+        case .legacyWhisper:
+            return !legacyWhisperRuntimeStatus.isAvailable
         }
-    }
-
-    var selectedLocalModelPrimaryActionTitle: String? {
-        guard selectedLocalModel.backend == .whisperCpp else { return nil }
-
-        switch localWhisperInstallState(for: selectedLocalModel) {
-        case .notInstalled:
-            return "Download model"
-        case .downloading:
-            return nil
-        case .installed:
-            return nil
-        case .failed:
-            return "Retry download"
-        }
-    }
-
-    var canDownloadSelectedLocalWhisperModel: Bool {
-        guard selectedLocalModel.backend == .whisperCpp else { return false }
-        guard whisperRuntimeStatus.isAvailable else { return false }
-
-        switch localWhisperInstallState(for: selectedLocalModel) {
-        case .notInstalled, .failed:
-            return true
-        case .downloading, .installed:
-            return false
-        }
-    }
-
-    var canRemoveSelectedLocalWhisperModel: Bool {
-        guard selectedLocalModel.backend == .whisperCpp else { return false }
-        return localWhisperInstallState(for: selectedLocalModel).isInstalled
     }
 
     var selectedLocalModelSecondaryNote: String {
-        switch selectedLocalModel.backend {
+        switch selectedLocalEngineMode {
         case .appleSpeech:
             return "No download required."
-        case .whisperCpp:
+        case .whisperKit:
             if selectedLocalModel.recommendedForFirstDownload {
                 return "Recommended first Whisper download."
             }
             return selectedLocalModel.detail
+        case .legacyWhisper:
+            return "Uses local whisper.cpp model files already installed on this Mac."
         }
-    }
-
-    var whisperRuntimeSystemInfoSummary: String? {
-        guard let systemInfo = whisperRuntimeStatus.systemInfo,
-              !systemInfo.isEmpty else {
-            return nil
-        }
-        return systemInfo
     }
 
     var isLocalLogicRuntimeStatusError: Bool {
@@ -766,8 +786,22 @@ final class TranscriptionViewModel: ObservableObject {
 
     func selectLocalModel(_ model: LocalTranscriptionModel) {
         selectedLocalModel = model
-        if model.backend == .whisperCpp {
+        if model.isAppleModel {
+            selectedLocalEngineMode = .appleSpeech
+        } else if selectedLocalEngineMode == .appleSpeech {
+            selectedLocalEngineMode = .whisperKit
+        }
+        if model.isWhisperModel {
             refreshWhisperRuntime()
+        }
+    }
+
+    func selectLocalEngineMode(_ mode: LocalTranscriptionEngineMode) {
+        selectedLocalEngineMode = mode
+        if mode == .appleSpeech {
+            selectedLocalModel = .appleOnDevice
+        } else if selectedLocalModel.isAppleModel {
+            selectedLocalModel = .whisperBase
         }
     }
 
@@ -816,26 +850,45 @@ final class TranscriptionViewModel: ObservableObject {
         whisperRuntimeLoadState = .checking
         Task { [weak self] in
             guard let self else { return }
-            let runtime = await whisperModelManager.runtimeStatus()
-            let states = await whisperModelManager.refreshInstallStates()
+            let runtime = await whisperKitModelManager.runtimeStatus()
+            let states = await whisperKitModelManager.refreshInstallStates()
+            let legacyRuntime = await whisperModelManager.runtimeStatus()
+            let legacyStates = await whisperModelManager.refreshInstallStates()
             guard !Task.isCancelled else { return }
             whisperRuntimeStatus = runtime
             whisperModelInstallStates = states
+            legacyWhisperRuntimeStatus = legacyRuntime
+            legacyWhisperInstallStates = legacyStates
             whisperRuntimeLoadState = runtime.isAvailable ? .ready : .error(runtime.message)
         }
     }
 
-    func downloadSelectedLocalWhisperModel() {
-        guard selectedLocalModel.backend == .whisperCpp else { return }
-        let model = selectedLocalModel
-        whisperModelInstallStates[model] = .downloading(progress: nil)
-        whisperRuntimeLoadState = .checking
-
+    func checkWhisperKitServer() {
+        whisperKitServerLoadState = .checking
         Task { [weak self] in
             guard let self else { return }
-            let state = await whisperModelManager.downloadModel(model)
-            let runtime = await whisperModelManager.runtimeStatus()
-            let states = await whisperModelManager.refreshInstallStates()
+            let status = await whisperKitServerManager.status(
+                connectionMode: selectedWhisperServerConnectionMode,
+                externalBaseURL: whisperServerBaseURL
+            )
+            guard !Task.isCancelled else { return }
+            whisperKitServerStatus = status
+            whisperKitServerLoadState = status.isReachable ? .ready : .error(status.message)
+        }
+    }
+
+    func downloadWhisperModel(_ model: LocalTranscriptionModel) {
+        guard model.isWhisperModel else { return }
+        whisperModelInstallStates[model] = .downloading(progress: nil)
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await whisperKitModelManager.downloadModel(model) { progress in
+                await MainActor.run {
+                    self.whisperModelInstallStates[model] = .downloading(progress: progress)
+                }
+            }
+            let runtime = await whisperKitModelManager.runtimeStatus()
+            let states = await whisperKitModelManager.refreshInstallStates()
             guard !Task.isCancelled else { return }
             whisperRuntimeStatus = runtime
             whisperModelInstallStates = states.merging([model: state]) { _, new in new }
@@ -848,14 +901,41 @@ final class TranscriptionViewModel: ObservableObject {
         }
     }
 
-    func removeSelectedLocalWhisperModel() {
-        guard selectedLocalModel.backend == .whisperCpp else { return }
-        let model = selectedLocalModel
+    func installWhisperModel(_ model: LocalTranscriptionModel) {
+        guard model.isWhisperModel else { return }
+        whisperModelInstallStates[model] = .installing
+        Task { [weak self] in
+            guard let self else { return }
+            let state = await whisperKitModelManager.installModel(model) { progress in
+                await MainActor.run {
+                    if let progress {
+                        self.whisperModelInstallStates[model] = .downloading(progress: progress)
+                    } else {
+                        self.whisperModelInstallStates[model] = .installing
+                    }
+                }
+            }
+            let runtime = await whisperKitModelManager.runtimeStatus()
+            let states = await whisperKitModelManager.refreshInstallStates()
+            guard !Task.isCancelled else { return }
+            whisperRuntimeStatus = runtime
+            whisperModelInstallStates = states.merging([model: state]) { _, new in new }
+            switch state {
+            case .failed(let message):
+                whisperRuntimeLoadState = .error(message)
+            default:
+                whisperRuntimeLoadState = runtime.isAvailable ? .ready : .error(runtime.message)
+            }
+        }
+    }
+
+    func removeWhisperModel(_ model: LocalTranscriptionModel) {
+        guard model.isWhisperModel else { return }
         Task { [weak self] in
             guard let self else { return }
             do {
-                try await whisperModelManager.removeModel(model)
-                let states = await whisperModelManager.refreshInstallStates()
+                try await whisperKitModelManager.removeModel(model)
+                let states = await whisperKitModelManager.refreshInstallStates()
                 guard !Task.isCancelled else { return }
                 whisperModelInstallStates = states
                 whisperRuntimeLoadState = whisperRuntimeStatus.isAvailable ? .ready : .error(whisperRuntimeStatus.message)
@@ -865,6 +945,34 @@ final class TranscriptionViewModel: ObservableObject {
                 whisperRuntimeLoadState = .error(error.localizedDescription)
             }
         }
+    }
+
+    func performPrimaryWhisperAction(for model: LocalTranscriptionModel) {
+        guard selectedLocalEngineMode == .whisperKit else { return }
+        guard whisperRuntimeStatus.isAvailable else { return }
+
+        switch localWhisperInstallState(for: model) {
+        case .notDownloaded:
+            downloadWhisperModel(model)
+        case .downloaded:
+            installWhisperModel(model)
+        case .failed:
+            downloadWhisperModel(model)
+        case .downloading, .installing, .ready:
+            break
+        }
+    }
+
+    @discardableResult
+    func refreshWhisperModelState(_ model: LocalTranscriptionModel) -> WhisperModelInstallState {
+        let state = whisperModelInstallStates[model] ?? .notDownloaded
+        Task { [weak self] in
+            guard let self else { return }
+            let refreshedState = await whisperKitModelManager.refreshModelState(for: model)
+            guard !Task.isCancelled else { return }
+            whisperModelInstallStates[model] = refreshedState
+        }
+        return state
     }
 
     func start(fromHotkey: Bool = false) {
@@ -879,6 +987,9 @@ final class TranscriptionViewModel: ObservableObject {
 
         shouldForceInsertionForCurrentRecording = fromHotkey
         let activeContext = activeAppContextService.currentContext()
+        activeLocalModelLifecycleState = transcriptionMode == .local && selectedLocalModel.isWhisperModel
+            ? activeWhisperLifecycleState(for: selectedLocalModel).lifecycleIdentifier
+            : nil
         activeRecordingSessionContext = RecordingSessionContext(
             activeAppContext: activeContext,
             insertionTarget: activeContext.insertionTarget,
@@ -921,8 +1032,10 @@ final class TranscriptionViewModel: ObservableObject {
         pendingDoubleTapDate = nil
         let shouldInsertOnStop = shouldForceInsertionForCurrentRecording
         let recordingSessionContext = activeRecordingSessionContext
+        let recordedLocalModelLifecycleState = activeLocalModelLifecycleState
         shouldForceInsertionForCurrentRecording = false
         activeRecordingSessionContext = nil
+        activeLocalModelLifecycleState = nil
         if interactionSettings.showListeningIndicator {
             listeningIndicatorService.showProcessing()
         } else {
@@ -961,6 +1074,7 @@ final class TranscriptionViewModel: ObservableObject {
                         }
                     }
                 }
+                let localRouteResolution = await managedLocalTranscriptionService?.latestRouteResolution()
 
                 if case .some(.skippedSilence(let context)) = lastSessionCompletionResult {
                     appendDiagnosticSession(
@@ -971,7 +1085,11 @@ final class TranscriptionViewModel: ObservableObject {
                             triggerSource: context.triggerSource,
                             triggerMode: context.triggerMode,
                             transcriptionEngine: selectedTranscriptionEngineIDForDiagnostics,
+                            localEngineMode: transcriptionMode == .local ? selectedLocalEngineMode.rawValue : nil,
+                            resolvedBackend: localRouteResolution?.resolvedBackend.rawValue,
+                            serverConnectionMode: localRouteResolution?.serverConnectionMode?.rawValue,
                             modelID: resultModelIDForDiagnostics,
+                            localModelLifecycleState: recordedLocalModelLifecycleState,
                             logicModelID: selectedLogicModelIDForDiagnostics,
                             reasoningEffort: logicSettings.reasoningEffort.rawValue,
                             formattingProfile: nil,
@@ -987,7 +1105,8 @@ final class TranscriptionViewModel: ObservableObject {
                             silencePeak: context.audioActivitySummary?.peakLevel,
                             silenceAverageRMS: context.audioActivitySummary?.averagePower,
                             silenceVoicedRatio: context.audioActivitySummary?.voicedRatio,
-                            skippedForSilence: true
+                            skippedForSilence: true,
+                            failureMessage: nil
                         )
                     )
                     selectedTranscriptViewMode = .raw
@@ -1029,7 +1148,11 @@ final class TranscriptionViewModel: ObservableObject {
                         autoFormatEnabled: autoFormatEnabled,
                         canRunAutoFormat: canRunAutoFormat,
                         transcriptionEngineID: selectedTranscriptionEngineIDForDiagnostics,
+                        localEngineMode: transcriptionMode == .local ? selectedLocalEngineMode.rawValue : nil,
+                        resolvedLocalBackend: localRouteResolution?.resolvedBackend.rawValue,
+                        serverConnectionMode: localRouteResolution?.serverConnectionMode?.rawValue,
                         transcriptionLatencyMs: max(Int(Date().timeIntervalSince(transcriptionStartedAt) * 1000), 0),
+                        localModelLifecycleState: recordedLocalModelLifecycleState,
                         effectiveAPIKey: effectiveApiKey,
                         selectedRemoteLogicModelID: selectedRemoteLogicModelID,
                         selectedLocalLogicModelID: selectedLocalLogicModelID,
@@ -1056,6 +1179,10 @@ final class TranscriptionViewModel: ObservableObject {
                 reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
             } catch {
                 listeningIndicatorService.hideListening()
+                let localRouteResolution = await managedLocalTranscriptionService?.latestRouteResolution()
+                if transcriptionMode == .local, selectedLocalModel.isWhisperModel {
+                    whisperModelInstallStates[selectedLocalModel] = .failed(message: error.localizedDescription)
+                }
                 lastSessionCompletionResult = .failed(
                     message: error.localizedDescription,
                     context: recordingSessionContext
@@ -1069,7 +1196,11 @@ final class TranscriptionViewModel: ObservableObject {
                             triggerSource: recordingSessionContext.triggerSource,
                             triggerMode: recordingSessionContext.triggerMode,
                             transcriptionEngine: selectedTranscriptionEngineIDForDiagnostics,
+                            localEngineMode: transcriptionMode == .local ? selectedLocalEngineMode.rawValue : nil,
+                            resolvedBackend: localRouteResolution?.resolvedBackend.rawValue,
+                            serverConnectionMode: localRouteResolution?.serverConnectionMode?.rawValue,
                             modelID: resultModelIDForDiagnostics,
+                            localModelLifecycleState: recordedLocalModelLifecycleState,
                             logicModelID: selectedLogicModelIDForDiagnostics,
                             reasoningEffort: logicSettings.reasoningEffort.rawValue,
                             formattingProfile: nil,
@@ -1085,7 +1216,8 @@ final class TranscriptionViewModel: ObservableObject {
                             silencePeak: recordingSessionContext.audioActivitySummary?.peakLevel,
                             silenceAverageRMS: recordingSessionContext.audioActivitySummary?.averagePower,
                             silenceVoicedRatio: recordingSessionContext.audioActivitySummary?.voicedRatio,
-                            skippedForSilence: false
+                            skippedForSilence: false,
+                            failureMessage: error.localizedDescription
                         )
                     )
                     reloadDiagnosticSessions(limit: diagnosticsSessionLimit.rawValue)
@@ -1857,7 +1989,8 @@ final class TranscriptionViewModel: ObservableObject {
                 languageHint: nil,
                 chunkingStrategy: nil,
                 knownSpeakerNames: [],
-                knownSpeakerReferences: []
+                knownSpeakerReferences: [],
+                localEngineMode: selectedLocalEngineMode
             )
             return TranscriptionSessionRequest(
                 mode: .local,
@@ -1908,6 +2041,10 @@ final class TranscriptionViewModel: ObservableObject {
         if let savedLocalModel = UserDefaults.standard.string(forKey: Self.savedLocalModelDefaultsKey),
            let localModel = LocalTranscriptionModel(rawValue: savedLocalModel) {
             selectedLocalModel = localModel
+        }
+        if let savedLocalEngineMode = UserDefaults.standard.string(forKey: Self.savedLocalEngineModeDefaultsKey),
+           let localEngineMode = LocalTranscriptionEngineMode.persistedValue(savedLocalEngineMode, selectedModel: selectedLocalModel) {
+            selectedLocalEngineMode = localEngineMode
         }
 
         if let savedRemoteModel = UserDefaults.standard.string(forKey: Self.savedRemoteModelDefaultsKey),
@@ -1991,21 +2128,43 @@ final class TranscriptionViewModel: ObservableObject {
             }
             return "Select a remote transcription model in Settings."
         case .local:
-            switch selectedLocalModel.backend {
+            switch selectedLocalEngineMode {
             case .appleSpeech:
-                return "Local transcription is unavailable right now."
-            case .whisperCpp:
+                return "Apple Speech is ready."
+            case .whisperKit:
                 guard whisperRuntimeStatus.isAvailable else {
                     return whisperRuntimeStatus.message
                 }
 
                 switch localWhisperInstallState(for: selectedLocalModel) {
-                case .notInstalled:
-                    return "\(selectedLocalModel.title) is not installed. Download the model in Settings."
+                case .notDownloaded:
+                    return "\(selectedLocalModel.title) is not downloaded yet."
                 case .downloading:
                     return "Downloading \(selectedLocalModel.title)…"
-                case .installed:
-                    return "Local Whisper is ready."
+                case .downloaded:
+                    return "\(selectedLocalModel.title) is downloaded and ready to install."
+                case .installing:
+                    return "Installing \(selectedLocalModel.title)…"
+                case .ready:
+                    return "WhisperKit is ready."
+                case .failed(let message):
+                    return message
+                }
+            case .legacyWhisper:
+                guard legacyWhisperRuntimeStatus.isAvailable else {
+                    return legacyWhisperRuntimeStatus.message
+                }
+                switch legacyWhisperInstallState(for: selectedLocalModel) {
+                case .notDownloaded:
+                    return "\(selectedLocalModel.title) is not installed for legacy Whisper."
+                case .downloading:
+                    return "\(selectedLocalModel.title) is preparing for legacy Whisper."
+                case .downloaded:
+                    return "\(selectedLocalModel.title) is staged and needs legacy installation."
+                case .installing:
+                    return "Installing \(selectedLocalModel.title) for legacy Whisper…"
+                case .ready:
+                    return "Legacy Whisper is ready."
                 case .failed(let message):
                     return message
                 }
@@ -2024,22 +2183,44 @@ final class TranscriptionViewModel: ObservableObject {
             }
             return "Ready to record with remote transcription."
         case .local:
-            switch selectedLocalModel.backend {
+            switch selectedLocalEngineMode {
             case .appleSpeech:
                 return "Ready to record with local transcription."
-            case .whisperCpp:
+            case .whisperKit:
                 guard whisperRuntimeStatus.isAvailable else {
                     return whisperRuntimeStatus.message
                 }
                 switch localWhisperInstallState(for: selectedLocalModel) {
-                case .notInstalled:
-                    return "\(selectedLocalModel.title) is not installed."
+                case .notDownloaded:
+                    return "\(selectedLocalModel.title) is not downloaded yet."
                 case .downloading:
                     return "Downloading \(selectedLocalModel.title)…"
-                case .installed:
+                case .downloaded:
+                    return "\(selectedLocalModel.title) is downloaded and ready to install."
+                case .installing:
+                    return "Installing \(selectedLocalModel.title)…"
+                case .ready:
                     return "Ready to record with \(selectedLocalModel.title)."
                 case .failed(let message):
                     return message
+                }
+            case .legacyWhisper:
+                guard legacyWhisperRuntimeStatus.isAvailable else {
+                    return legacyWhisperRuntimeStatus.message
+                }
+                switch legacyWhisperInstallState(for: selectedLocalModel) {
+                case .ready:
+                    return "Ready to record with legacy Whisper."
+                case .failed(let message):
+                    return message
+                case .notDownloaded:
+                    return "\(selectedLocalModel.title) is not installed for legacy Whisper."
+                case .downloading:
+                    return "\(selectedLocalModel.title) is preparing for legacy Whisper."
+                case .downloaded:
+                    return "\(selectedLocalModel.title) is staged and needs legacy installation."
+                case .installing:
+                    return "Installing \(selectedLocalModel.title) for legacy Whisper…"
                 }
             }
         }
@@ -2102,7 +2283,7 @@ final class TranscriptionViewModel: ObservableObject {
         case .remote:
             return "openai-batch-sse"
         case .local:
-            return selectedLocalModel.backend.engineID
+            return currentLocalTranscriptionEngineID
         }
     }
 
@@ -2120,57 +2301,175 @@ final class TranscriptionViewModel: ObservableObject {
     }
 
     private func localWhisperInstallState(for model: LocalTranscriptionModel) -> WhisperModelInstallState {
-        whisperModelInstallStates[model] ?? .notInstalled
+        whisperModelInstallStates[model] ?? .notDownloaded
+    }
+
+    private func legacyWhisperInstallState(for model: LocalTranscriptionModel) -> WhisperModelInstallState {
+        legacyWhisperInstallStates[model] ?? .notDownloaded
+    }
+
+    private func activeWhisperLifecycleState(for model: LocalTranscriptionModel) -> WhisperModelInstallState {
+        switch selectedLocalEngineMode {
+        case .appleSpeech, .whisperKit:
+            return localWhisperInstallState(for: model)
+        case .legacyWhisper:
+            return legacyWhisperInstallState(for: model)
+        }
+    }
+
+    private var currentLocalTranscriptionEngineID: String {
+        switch selectedLocalEngineMode {
+        case .appleSpeech:
+            return LocalTranscriptionBackend.appleSpeech.engineID
+        case .whisperKit:
+            return LocalTranscriptionBackend.whisperKitSDK.engineID
+        case .legacyWhisper:
+            return LocalTranscriptionBackend.whisperCpp.engineID
+        }
     }
 
     func localModelBadgeText(_ model: LocalTranscriptionModel) -> String {
-        switch model.backend {
-        case .appleSpeech:
+        if model.isAppleModel {
             return "Ready"
-        case .whisperCpp:
-            if !whisperRuntimeStatus.isSupported {
-                return "Unavailable"
-            }
-            switch localWhisperInstallState(for: model) {
-            case .notInstalled:
-                return model.recommendedForFirstDownload ? "Download" : "Install"
-            case .downloading:
-                return "Downloading"
-            case .installed:
-                return selectedLocalModel == model ? "Ready" : "Installed"
-            case .failed:
-                return "Retry"
-            }
+        }
+
+        let state = activeWhisperLifecycleState(for: model)
+        let runtimeSupported = selectedLocalEngineMode == .legacyWhisper
+            ? legacyWhisperRuntimeStatus.isSupported
+            : whisperRuntimeStatus.isSupported
+        guard runtimeSupported else {
+            return "Unavailable"
+        }
+
+        switch state {
+        case .notDownloaded:
+            return selectedLocalEngineMode == .legacyWhisper ? "Unavailable" : "Download"
+        case .downloading:
+            return selectedLocalEngineMode == .legacyWhisper ? "Unavailable" : "Downloading"
+        case .downloaded:
+            return selectedLocalEngineMode == .legacyWhisper ? "Unavailable" : "Install"
+        case .installing:
+            return selectedLocalEngineMode == .legacyWhisper ? "Unavailable" : "Installing"
+        case .ready:
+            return selectedLocalModel == model ? "Ready" : "Installed"
+        case .failed:
+            return selectedLocalEngineMode == .legacyWhisper ? "Unavailable" : "Retry"
         }
     }
 
     func localModelNotes(_ model: LocalTranscriptionModel) -> String {
-        switch model.backend {
-        case .appleSpeech:
+        if model.isAppleModel {
             return ""
-        case .whisperCpp:
-            if !whisperRuntimeStatus.isSupported {
-                return "Apple Silicon required."
+        }
+
+        let state = activeWhisperLifecycleState(for: model)
+        let runtimeSupported = selectedLocalEngineMode == .legacyWhisper
+            ? legacyWhisperRuntimeStatus.isSupported
+            : whisperRuntimeStatus.isSupported
+        guard runtimeSupported else {
+            return "Apple Silicon required."
+        }
+
+        switch state {
+        case .notDownloaded:
+            if selectedLocalEngineMode == .legacyWhisper {
+                return "Legacy whisper.cpp model files are not installed for this model."
             }
-            switch localWhisperInstallState(for: model) {
-            case .notInstalled:
-                return model.recommendedForFirstDownload ? "Recommended first download." : "Download once for offline transcription."
-            case .downloading:
-                return "Model download in progress."
-            case .installed:
-                return "Stored in Application Support for offline use."
-            case .failed(let message):
-                return message
+            return model.recommendedForFirstDownload
+                ? "Recommended first download."
+                : model.detail + (model == .whisperMedium || model == .whisperLargeV3 ? " Heavier model." : "")
+        case .downloading:
+            return selectedLocalEngineMode == .legacyWhisper
+                ? "Legacy whisper.cpp setup is incomplete for this model."
+                : "Model download in progress."
+        case .downloaded:
+            return selectedLocalEngineMode == .legacyWhisper
+                ? "Legacy whisper.cpp setup is incomplete for this model."
+                : "Download complete. Install to make it available for transcription."
+        case .installing:
+            return selectedLocalEngineMode == .legacyWhisper
+                ? "Legacy whisper.cpp setup is incomplete for this model."
+                : "Finalizing local model setup."
+        case .ready:
+            if selectedLocalEngineMode == .legacyWhisper {
+                return "Installed for offline transcription with whisper.cpp."
             }
+            return "Installed for offline transcription."
+        case .failed(let message):
+            return message
+        }
+    }
+
+    func localModelPrimaryActionTitle(_ model: LocalTranscriptionModel) -> String? {
+        guard model.isWhisperModel else { return nil }
+        guard selectedLocalEngineMode == .whisperKit else { return nil }
+        guard whisperRuntimeStatus.isAvailable else { return nil }
+
+        switch localWhisperInstallState(for: model) {
+        case .notDownloaded:
+            return "Download"
+        case .downloaded:
+            return "Install"
+        case .failed:
+            return "Retry"
+        case .downloading, .installing, .ready:
+            return nil
+        }
+    }
+
+    func canRunLocalModelPrimaryAction(_ model: LocalTranscriptionModel) -> Bool {
+        guard model.isWhisperModel else { return false }
+        guard selectedLocalEngineMode == .whisperKit else { return false }
+        guard whisperRuntimeStatus.isAvailable else { return false }
+        return !localWhisperInstallState(for: model).isBusy && localModelPrimaryActionTitle(model) != nil
+    }
+
+    func canRemoveLocalModel(_ model: LocalTranscriptionModel) -> Bool {
+        guard model.isWhisperModel else { return false }
+        guard selectedLocalEngineMode == .whisperKit else { return false }
+        switch localWhisperInstallState(for: model) {
+        case .downloaded, .ready, .failed:
+            return true
+        case .notDownloaded, .downloading, .installing:
+            return false
+        }
+    }
+
+    func localModelProgressValue(_ model: LocalTranscriptionModel) -> Double? {
+        guard selectedLocalEngineMode == .whisperKit else { return nil }
+        switch localWhisperInstallState(for: model) {
+        case .downloading(let progress):
+            return progress
+        case .installing:
+            return nil
+        case .notDownloaded, .downloaded, .ready, .failed:
+            return nil
+        }
+    }
+
+    func localWhisperInstallStateDescription(_ model: LocalTranscriptionModel) -> LocalWhisperInstallStateDescription {
+        guard selectedLocalEngineMode == .whisperKit else {
+            return .none
+        }
+        switch localWhisperInstallState(for: model) {
+        case .downloading:
+            return .progress("Downloading \(model.title)…")
+        case .installing:
+            return .progress("Installing \(model.title)…")
+        case .notDownloaded, .downloaded, .ready, .failed:
+            return .none
         }
     }
 
     func isLocalModelSelectable(_ model: LocalTranscriptionModel) -> Bool {
-        switch model.backend {
-        case .appleSpeech:
+        if model.isAppleModel {
             return true
-        case .whisperCpp:
+        }
+        switch selectedLocalEngineMode {
+        case .appleSpeech, .whisperKit:
             return whisperRuntimeStatus.isSupported
+        case .legacyWhisper:
+            return legacyWhisperRuntimeStatus.isSupported
         }
     }
 

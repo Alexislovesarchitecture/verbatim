@@ -22,6 +22,8 @@ enum AudioRecorderError: LocalizedError {
     case notRecording
     case fileCreationFailed
     case conversionSetupFailed
+    case recordingWriteFailed(String)
+    case emptyRecordingArtifact
 
     var errorDescription: String? {
         switch self {
@@ -35,6 +37,10 @@ enum AudioRecorderError: LocalizedError {
             return "Could not prepare a recording file."
         case .conversionSetupFailed:
             return "Could not configure live audio conversion."
+        case .recordingWriteFailed(let message):
+            return "Could not write recorded audio: \(message)"
+        case .emptyRecordingArtifact:
+            return "Recording finished without any usable audio. Try holding the key slightly longer and recording again."
         }
     }
 }
@@ -46,6 +52,11 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
     // The engine tap executes off the main actor, so keep audio IO state behind a lock
     // instead of bouncing every buffer through the view model/UI actor.
     private final class RecordingIOState: @unchecked Sendable {
+        struct Snapshot {
+            let didWriteAudio: Bool
+            let writeErrorDescription: String?
+        }
+
         private let lock = NSLock()
         private var audioFile: AVAudioFile?
         private var converter: AVAudioConverter?
@@ -53,6 +64,9 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
         private var continuation: AsyncStream<AudioPCM16Frame>.Continuation?
         private var sequenceNumber: UInt64 = 0
         private var didLogConversionFailure = false
+        private var didLogWriteFailure = false
+        private var didWriteAudio = false
+        private var writeErrorDescription: String?
 
         func configure(
             audioFile: AVAudioFile,
@@ -67,32 +81,37 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             self.continuation = continuation
             sequenceNumber = 0
             didLogConversionFailure = false
+            didLogWriteFailure = false
+            didWriteAudio = false
+            writeErrorDescription = nil
             lock.unlock()
         }
 
-        func finishAndReset() {
+        func finishAndReset() -> Snapshot {
             lock.lock()
             let activeContinuation = continuation
+            let snapshot = Snapshot(
+                didWriteAudio: didWriteAudio,
+                writeErrorDescription: writeErrorDescription
+            )
             audioFile = nil
             converter = nil
             processingFormat = nil
             continuation = nil
             sequenceNumber = 0
             didLogConversionFailure = false
+            didLogWriteFailure = false
+            didWriteAudio = false
+            writeErrorDescription = nil
             lock.unlock()
 
             activeContinuation?.finish()
+            return snapshot
         }
 
         func writeAndEmit(buffer: AVAudioPCMBuffer) {
             lock.lock()
             defer { lock.unlock() }
-
-            do {
-                try audioFile?.write(from: buffer)
-            } catch {
-                // Ignore write failures at tap level; surface stop/transcription issues later.
-            }
 
             guard let converter, let processingFormat else {
                 return
@@ -118,6 +137,17 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             }
             guard targetBuffer.frameLength > 0 else { return }
             guard let pcm = targetBuffer.floatChannelData else { return }
+
+            do {
+                try audioFile?.write(from: targetBuffer)
+                didWriteAudio = true
+            } catch {
+                writeErrorDescription = error.localizedDescription
+                if !didLogWriteFailure {
+                    didLogWriteFailure = true
+                    audioRecorderLogger.error("Recording file write failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
 
             let frameData = encodePCM16(from: pcm[0], frameLength: Int(targetBuffer.frameLength))
 
@@ -188,7 +218,12 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
         }
 
         do {
-            let audioFile = try AVAudioFile(forWriting: fileURL, settings: sourceFormat.settings)
+            let audioFile = try AVAudioFile(
+                forWriting: fileURL,
+                settings: processingFormat.settings,
+                commonFormat: processingFormat.commonFormat,
+                interleaved: processingFormat.isInterleaved
+            )
             let (stream, continuation) = makeLiveFrameStream()
 
             recordingIOState.configure(
@@ -227,7 +262,7 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             }
             engine.stop()
             engine.reset()
-            recordingIOState.finishAndReset()
+            _ = recordingIOState.finishAndReset()
             liveFrameStream = nil
             cleanup(outputURL)
             outputURL = nil
@@ -254,13 +289,32 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
         let recordedURL = outputURL
         let stream = liveFrameStream
 
-        recordingIOState.finishAndReset()
+        let ioSnapshot = recordingIOState.finishAndReset()
         liveFrameStream = nil
         outputURL = nil
 
         guard let recordedURL, let stream else {
             return nil
         }
+
+        if let writeErrorDescription = ioSnapshot.writeErrorDescription, ioSnapshot.didWriteAudio == false {
+            cleanup(recordedURL)
+            throw AudioRecorderError.recordingWriteFailed(writeErrorDescription)
+        }
+
+        do {
+            let recordedFile = try AVAudioFile(forReading: recordedURL)
+            guard recordedFile.length > 0 else {
+                cleanup(recordedURL)
+                throw AudioRecorderError.emptyRecordingArtifact
+            }
+        } catch let recorderError as AudioRecorderError {
+            throw recorderError
+        } catch {
+            cleanup(recordedURL)
+            throw AudioRecorderError.recordingWriteFailed(error.localizedDescription)
+        }
+
         return AudioRecordingArtifact(audioFileURL: recordedURL, frameStream: stream)
     }
 

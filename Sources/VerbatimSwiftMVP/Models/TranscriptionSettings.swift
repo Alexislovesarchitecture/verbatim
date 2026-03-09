@@ -125,6 +125,14 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    var isAppleModel: Bool {
+        self == .appleOnDevice
+    }
+
+    var isWhisperModel: Bool {
+        !isAppleModel
+    }
+
     var title: String {
         switch self {
         case .appleOnDevice:
@@ -164,11 +172,32 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
         case .appleOnDevice:
             return .appleSpeech
         case .whisperTiny, .whisperBase, .whisperSmall, .whisperMedium, .whisperLargeV3:
-            return .whisperCpp
+            return .whisperKitSDK
+        }
+    }
+
+    var whisperCppModelName: String? {
+        switch self {
+        case .appleOnDevice:
+            return nil
+        case .whisperTiny:
+            return "tiny"
+        case .whisperBase:
+            return "base"
+        case .whisperSmall:
+            return "small"
+        case .whisperMedium:
+            return "medium"
+        case .whisperLargeV3:
+            return "large-v3"
         }
     }
 
     var whisperModelName: String? {
+        whisperCppModelName
+    }
+
+    var whisperKitModelName: String? {
         switch self {
         case .appleOnDevice:
             return nil
@@ -187,6 +216,69 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var recommendedForFirstDownload: Bool {
         self == .whisperBase
+    }
+}
+
+enum LocalTranscriptionEngineMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case appleSpeech = "apple_speech"
+    case whisperKit = "whisperkit"
+    case legacyWhisper = "legacy_whisper"
+
+    var id: String { rawValue }
+
+    static var userFacingCases: [LocalTranscriptionEngineMode] {
+        [.appleSpeech, .whisperKit, .legacyWhisper]
+    }
+
+    static func persistedValue(_ rawValue: String, selectedModel: LocalTranscriptionModel?) -> LocalTranscriptionEngineMode? {
+        if let mode = LocalTranscriptionEngineMode(rawValue: rawValue) {
+            return mode
+        }
+
+        switch rawValue {
+        case "whisper_auto", "whisperkit_server":
+            return selectedModel?.isWhisperModel == false ? .appleSpeech : .whisperKit
+        default:
+            return nil
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .appleSpeech:
+            return "Apple Speech"
+        case .whisperKit:
+            return "WhisperKit"
+        case .legacyWhisper:
+            return "Legacy Whisper"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .appleSpeech:
+            return "Built-in Apple Speech"
+        case .whisperKit:
+            return "App-managed WhisperKit models"
+        case .legacyWhisper:
+            return "Local whisper.cpp fallback"
+        }
+    }
+}
+
+enum WhisperKitServerConnectionMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case managedHelper = "managed_helper"
+    case externalServer = "external_server"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .managedHelper:
+            return "Managed Helper"
+        case .externalServer:
+            return "External Server"
+        }
     }
 }
 

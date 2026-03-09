@@ -36,9 +36,20 @@ final class TranscriptionCoordinator {
     init(
         recorder: AudioRecorderServiceProtocol? = nil,
         remoteEngine: TranscriptionServiceProtocol = OpenAITranscriptionService(),
-        localEngine: LocalTranscriptionServiceProtocol = ManagedLocalTranscriptionService(
-            whisperService: WhisperLocalTranscriptionService(modelManager: WhisperModelManager())
-        ),
+        localEngine: LocalTranscriptionServiceProtocol = {
+            let routeTracker = LocalTranscriptionRouteTracker()
+            let legacyManager = WhisperModelManager()
+            let whisperKitManager = WhisperKitModelManager()
+            return ManagedLocalTranscriptionService(
+                whisperKitService: WhisperKitLocalTranscriptionService(
+                    modelManager: whisperKitManager,
+                    routeTracker: routeTracker
+                ),
+                whisperService: WhisperLocalTranscriptionService(modelManager: legacyManager),
+                whisperCppModelManager: legacyManager,
+                routeTracker: routeTracker
+            )
+        }(),
         modelCatalogService: ModelCatalogServiceProtocol? = nil,
         audioActivityAnalyzer: AudioActivityAnalyzer = AudioActivityAnalyzer()
     ) {

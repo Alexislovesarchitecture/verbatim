@@ -4,3 +4,8 @@ name = "verbatim"
 
 [setup]
 script = ""
+
+[[actions]]
+name = "run and kill previous"
+icon = "tool"
+command = "cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim && pkill -f '/VerbatimSwiftMVP$' || true && swift run VerbatimSwiftMVP"

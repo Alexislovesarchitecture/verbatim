@@ -7,6 +7,7 @@ protocol LocalTranscriptionServiceProtocol: TranscriptionEngine {
 
 enum LocalTranscriptionError: LocalizedError {
     case missingAudioFile
+    case invalidAudioFile(String)
     case unsupportedModel(LocalTranscriptionModel)
     case speechPermissionDenied
     case speechPermissionRestricted
@@ -16,6 +17,7 @@ enum LocalTranscriptionError: LocalizedError {
     case noTranscriptionResult
     case whisperRuntimeUnavailable(String)
     case whisperModelNotInstalled(LocalTranscriptionModel)
+    case whisperModelNeedsInstall(LocalTranscriptionModel)
     case whisperTranscriptionFailed(String)
     case unsupportedHardware(String)
 
@@ -23,6 +25,8 @@ enum LocalTranscriptionError: LocalizedError {
         switch self {
         case .missingAudioFile:
             return "Recorded audio file is missing."
+        case .invalidAudioFile(let message):
+            return message
         case .unsupportedModel(let model):
             return "\(model.title) is not available for the current local backend."
         case .speechPermissionDenied:
@@ -41,6 +45,8 @@ enum LocalTranscriptionError: LocalizedError {
             return "Whisper runtime is unavailable: \(message)"
         case .whisperModelNotInstalled(let model):
             return "\(model.title) is not installed yet. Download the model in Settings."
+        case .whisperModelNeedsInstall(let model):
+            return "\(model.title) is downloaded but not installed yet. Install the model in Settings."
         case .whisperTranscriptionFailed(let message):
             return "Whisper transcription failed: \(message)"
         case .unsupportedHardware(let message):

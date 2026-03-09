@@ -137,7 +137,7 @@ final class TranscriptRecordStoreTests: XCTestCase {
         defer { sqlite3_close(db) }
 
         XCTAssertEqual(stringPragma("journal_mode", db: db), "wal")
-        XCTAssertEqual(intPragma("user_version", db: db), 4)
+        XCTAssertEqual(intPragma("user_version", db: db), 6)
     }
 
     func testLegacyTranscriptTableMigratesIntoTranscriptions() {
@@ -249,7 +249,11 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 triggerSource: .hotkey,
                 triggerMode: .holdToTalk,
                 transcriptionEngine: "remote",
+                localEngineMode: "whisper_auto",
+                resolvedBackend: "whisperkit_sdk",
+                serverConnectionMode: nil,
                 modelID: "gpt-4o-mini-transcribe",
+                localModelLifecycleState: "ready",
                 logicModelID: "gpt-5-mini",
                 reasoningEffort: "medium",
                 formattingProfile: "cleanup",
@@ -265,7 +269,8 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 silencePeak: 0.02,
                 silenceAverageRMS: 0.01,
                 silenceVoicedRatio: 0.12,
-                skippedForSilence: false
+                skippedForSilence: false,
+                failureMessage: "sample failure"
             )
         )
         sut.appendDiagnosticSession(
@@ -276,7 +281,11 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 triggerSource: .hotkey,
                 triggerMode: .holdToTalk,
                 transcriptionEngine: "remote",
+                localEngineMode: "whisperkit_server",
+                resolvedBackend: "whisperkit_server",
+                serverConnectionMode: "external_server",
                 modelID: "gpt-4o-mini-transcribe",
+                localModelLifecycleState: "downloading",
                 logicModelID: "gpt-5-mini",
                 reasoningEffort: "medium",
                 formattingProfile: nil,
@@ -292,7 +301,8 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 silencePeak: 0.0,
                 silenceAverageRMS: 0.0,
                 silenceVoicedRatio: 0.0,
-                skippedForSilence: true
+                skippedForSilence: true,
+                failureMessage: nil
             )
         )
 
@@ -301,8 +311,13 @@ final class TranscriptRecordStoreTests: XCTestCase {
 
         XCTAssertEqual(sessions.count, 2)
         XCTAssertTrue(sessions.first?.skippedForSilence ?? false)
+        XCTAssertEqual(sessions.first?.serverConnectionMode, "external_server")
         XCTAssertEqual(sessions.last?.logicModelID, "gpt-5-mini")
+        XCTAssertEqual(sessions.last?.localEngineMode, "whisper_auto")
+        XCTAssertEqual(sessions.last?.resolvedBackend, "whisperkit_sdk")
+        XCTAssertEqual(sessions.last?.localModelLifecycleState, "ready")
         XCTAssertEqual(sessions.last?.reasoningEffort, "medium")
+        XCTAssertEqual(sessions.last?.failureMessage, "sample failure")
         XCTAssertEqual(summary.averageTotalLatencyMs, 270)
         XCTAssertEqual(summary.permissionFallbackCount, 1)
         XCTAssertEqual(summary.silenceSkipRate, 0.5, accuracy: 0.001)

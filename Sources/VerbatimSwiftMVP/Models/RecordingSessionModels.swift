@@ -248,7 +248,11 @@ struct DiagnosticSessionRecord: Identifiable, Equatable, Sendable {
     let triggerSource: RecordingTriggerSource
     let triggerMode: HotkeyTriggerMode?
     let transcriptionEngine: String?
+    let localEngineMode: String?
+    let resolvedBackend: String?
+    let serverConnectionMode: String?
     let modelID: String?
+    let localModelLifecycleState: String?
     let logicModelID: String?
     let reasoningEffort: String?
     let formattingProfile: String?
@@ -265,6 +269,67 @@ struct DiagnosticSessionRecord: Identifiable, Equatable, Sendable {
     let silenceAverageRMS: Double?
     let silenceVoicedRatio: Double?
     let skippedForSilence: Bool
+    let failureMessage: String?
+
+    init(
+        sessionID: UUID,
+        startedAt: Date,
+        durationMs: Int,
+        triggerSource: RecordingTriggerSource,
+        triggerMode: HotkeyTriggerMode?,
+        transcriptionEngine: String?,
+        localEngineMode: String? = nil,
+        resolvedBackend: String? = nil,
+        serverConnectionMode: String? = nil,
+        modelID: String?,
+        localModelLifecycleState: String? = nil,
+        logicModelID: String?,
+        reasoningEffort: String?,
+        formattingProfile: String?,
+        transcriptionLatencyMs: Int?,
+        llmLatencyMs: Int?,
+        totalLatencyMs: Int?,
+        tokensIn: Int?,
+        cachedTokens: Int?,
+        insertionOutcome: InsertionOutcome?,
+        fallbackReason: ClipboardFallbackReason?,
+        targetApp: String?,
+        targetBundleID: String?,
+        silencePeak: Double?,
+        silenceAverageRMS: Double?,
+        silenceVoicedRatio: Double?,
+        skippedForSilence: Bool,
+        failureMessage: String? = nil
+    ) {
+        self.sessionID = sessionID
+        self.startedAt = startedAt
+        self.durationMs = durationMs
+        self.triggerSource = triggerSource
+        self.triggerMode = triggerMode
+        self.transcriptionEngine = transcriptionEngine
+        self.localEngineMode = localEngineMode
+        self.resolvedBackend = resolvedBackend
+        self.serverConnectionMode = serverConnectionMode
+        self.modelID = modelID
+        self.localModelLifecycleState = localModelLifecycleState
+        self.logicModelID = logicModelID
+        self.reasoningEffort = reasoningEffort
+        self.formattingProfile = formattingProfile
+        self.transcriptionLatencyMs = transcriptionLatencyMs
+        self.llmLatencyMs = llmLatencyMs
+        self.totalLatencyMs = totalLatencyMs
+        self.tokensIn = tokensIn
+        self.cachedTokens = cachedTokens
+        self.insertionOutcome = insertionOutcome
+        self.fallbackReason = fallbackReason
+        self.targetApp = targetApp
+        self.targetBundleID = targetBundleID
+        self.silencePeak = silencePeak
+        self.silenceAverageRMS = silenceAverageRMS
+        self.silenceVoicedRatio = silenceVoicedRatio
+        self.skippedForSilence = skippedForSilence
+        self.failureMessage = failureMessage
+    }
 
     var id: UUID { sessionID }
 }

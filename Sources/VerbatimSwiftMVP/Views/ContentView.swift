@@ -1052,48 +1052,19 @@ struct ContentView: View {
                 .font(.body)
                 .foregroundStyle(VerbatimPalette.ink)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Whisper runtime")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(VerbatimPalette.mutedInk)
-
-                Text(viewModel.localTranscriptionRuntimeStatusMessage)
-                    .font(.caption)
-                    .foregroundStyle(viewModel.isLocalTranscriptionRuntimeStatusError ? Color.orange : VerbatimPalette.mutedInk)
-
-                if let systemInfo = viewModel.whisperRuntimeSystemInfoSummary,
-                   viewModel.selectedLocalModel.backend == .whisperCpp {
-                    Text(systemInfo)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(VerbatimPalette.mutedInk)
-                }
-
-                HStack(spacing: 10) {
-                    Button("Check Whisper runtime", systemImage: "bolt.badge.checkmark") {
-                        viewModel.refreshWhisperRuntime()
-                    }
-                    .applyGlassButtonStyle()
-
-                    if let actionTitle = viewModel.selectedLocalModelPrimaryActionTitle {
-                        Button(actionTitle, systemImage: "arrow.down.circle") {
-                            viewModel.downloadSelectedLocalWhisperModel()
-                        }
-                        .applyGlassButtonStyle(prominent: true)
-                        .disabled(!viewModel.canDownloadSelectedLocalWhisperModel || isBusy)
-                    }
-
-                    if viewModel.canRemoveSelectedLocalWhisperModel {
-                        Button("Remove model", systemImage: "trash") {
-                            viewModel.removeSelectedLocalWhisperModel()
-                        }
-                        .applyGlassButtonStyle()
-                        .disabled(isBusy)
-                    }
+            Picker("Local engine", selection: $viewModel.selectedLocalEngineMode) {
+                ForEach(LocalTranscriptionEngineMode.userFacingCases) { mode in
+                    Text(mode.title).tag(mode)
                 }
             }
-            .applyInsetWellStyle(cornerRadius: 24, padding: 18)
+            .pickerStyle(.segmented)
+            .disabled(isBusy)
 
-            Text(viewModel.selectedLocalModelSecondaryNote)
+            Text(viewModel.selectedLocalEngineMode.subtitle)
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            Text("Apple On-Device is ready immediately. Choose WhisperKit for app-managed installs or Legacy Whisper for existing whisper.cpp models.")
                 .font(.caption)
                 .foregroundStyle(VerbatimPalette.mutedInk)
         }
@@ -1162,25 +1133,118 @@ struct ContentView: View {
 
                     VStack(spacing: 10) {
                         ForEach(LocalTranscriptionModel.allCases) { model in
-                            Button {
-                                viewModel.selectLocalModel(model)
-                            } label: {
-                                modelRow(
-                                    title: model.title,
-                                    subtitle: model.detail,
-                                    isSelected: viewModel.selectedLocalModel == model,
-                                    badgeText: viewModel.localModelBadgeText(model),
-                                    isAvailable: viewModel.isLocalModelSelectable(model),
-                                    notes: viewModel.localModelNotes(model),
-                                    accent: .amber
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isBusy || !viewModel.isLocalModelSelectable(model))
+                            localModelRow(model)
                         }
                     }
                 }
             }
+        }
+    }
+
+    private func localModelRow(_ model: LocalTranscriptionModel) -> some View {
+        let isSelected = viewModel.selectedLocalModel == model
+        let isAvailable = viewModel.isLocalModelSelectable(model)
+        let actionTitle = viewModel.localModelPrimaryActionTitle(model)
+        let canRunPrimary = viewModel.canRunLocalModelPrimaryAction(model) && !isBusy
+        let canRemove = viewModel.canRemoveLocalModel(model) && !isBusy
+        let progressValue = viewModel.localModelProgressValue(model)
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(model.title)
+                        .font(.system(size: 16, weight: .semibold, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.ink)
+
+                    Text(model.detail)
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+                }
+
+                Spacer()
+
+                Text(viewModel.localModelBadgeText(model))
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isAvailable ? VerbatimPalette.ink : VerbatimPalette.mutedInk)
+                    .applyStatusBadgeEffect()
+            }
+
+            HStack(spacing: 10) {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(isSelected ? AppSectionAccent.amber.tint : VerbatimPalette.mutedInk)
+
+                Text(isSelected ? "Selected" : "Tap to choose")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(isAvailable ? VerbatimPalette.ink : VerbatimPalette.mutedInk)
+
+                Spacer()
+            }
+
+            if !viewModel.localModelNotes(model).isEmpty {
+                Text(viewModel.localModelNotes(model))
+                    .font(.caption)
+                    .foregroundStyle(viewModel.localModelBadgeText(model) == "Retry" || !isAvailable ? Color.orange : VerbatimPalette.mutedInk)
+            }
+
+            if model.isWhisperModel {
+                if let actionTitle {
+                    HStack(spacing: 10) {
+                        Button(actionTitle, systemImage: actionTitle == "Install" ? "shippingbox" : "arrow.down.circle") {
+                            viewModel.performPrimaryWhisperAction(for: model)
+                        }
+                        .applyGlassButtonStyle(prominent: true)
+                        .disabled(!canRunPrimary)
+
+                        if canRemove {
+                            Button("Remove", systemImage: "trash") {
+                                viewModel.removeWhisperModel(model)
+                            }
+                            .applyGlassButtonStyle()
+                        }
+                    }
+                } else if canRemove {
+                    Button("Remove", systemImage: "trash") {
+                        viewModel.removeWhisperModel(model)
+                    }
+                    .applyGlassButtonStyle()
+                }
+
+                switch viewModel.localWhisperInstallStateDescription(model) {
+                case .progress(let label):
+                    VStack(alignment: .leading, spacing: 6) {
+                        if let progressValue {
+                            ProgressView(value: progressValue)
+                                .progressViewStyle(.linear)
+                        } else {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Text(label)
+                            .font(.caption)
+                            .foregroundStyle(VerbatimPalette.mutedInk)
+                    }
+                case .none:
+                    EmptyView()
+                }
+            }
+        }
+        .padding(18)
+        .background(
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .fill(isSelected ? AppSectionAccent.amber.glow : Color.white.opacity(0.10))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 22, style: .continuous)
+                        .stroke(
+                            isSelected ? AppSectionAccent.amber.tint.opacity(0.70) : Color.white.opacity(0.24),
+                            lineWidth: 1
+                        )
+                )
+        )
+        .opacity(isAvailable ? 1 : 0.68)
+        .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .onTapGesture {
+            guard !isBusy else { return }
+            viewModel.selectLocalModel(model)
         }
     }
 

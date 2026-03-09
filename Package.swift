@@ -9,7 +9,9 @@ let package = Package(
   products: [
     .executable(name: "VerbatimSwiftMVP", targets: ["VerbatimSwiftMVP"]),
   ],
-  dependencies: [],
+  dependencies: [
+    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.4"),
+  ],
   targets: [
     .binaryTarget(
       name: "whisper",
@@ -17,7 +19,10 @@ let package = Package(
     ),
     .executableTarget(
       name: "VerbatimSwiftMVP",
-      dependencies: ["whisper"],
+      dependencies: [
+        "whisper",
+        .product(name: "WhisperKit", package: "WhisperKit"),
+      ],
       path: "Sources",
       exclude: [
         "VerbatimSwiftMVP/Services/AppleLocalTranscriptionService 2.swift",

@@ -271,6 +271,53 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
         XCTAssertTrue(sut.hotkeyStatusMessage.contains("Using Control + Option + Space instead"))
     }
 
+    func testLegacyWhisperLocalEngineModeCanBeSelected() {
+        let activeContextService = SequencedActiveAppContextService(
+            contexts: [
+                ActiveAppContext(
+                    appName: "Messages",
+                    bundleID: "com.apple.MobileSMS",
+                    processIdentifier: 9,
+                    styleCategory: .personal,
+                    windowTitle: "Chat",
+                    focusedElementRole: "AXTextArea"
+                )
+            ]
+        )
+        let recordStore = ViewModelFakeRecordStore()
+        let insertionService = ViewModelFakeInsertionService()
+        let sut = makeViewModel(
+            coordinator: TranscriptionCoordinator(
+                recorder: ViewModelFakeAudioRecorder(
+                    artifact: AudioRecordingArtifact(
+                        audioFileURL: temporaryAudioURL(),
+                        frameStream: makeFrameStream(frames: [])
+                    )
+                ),
+                remoteEngine: ViewModelFakeRemoteEngine(
+                    transcript: Transcript.empty(modelID: "apple-on-device", responseFormat: "text")
+                ),
+                localEngine: ViewModelFakeLocalEngine(
+                    transcript: Transcript.empty(modelID: "apple-on-device", responseFormat: "text")
+                ),
+                modelCatalogService: ViewModelFakeModelCatalog()
+            ),
+            recordStore: recordStore,
+            insertionService: insertionService,
+            activeAppContextService: activeContextService,
+            pipeline: makePipeline(
+                recordStore: recordStore,
+                insertionService: insertionService,
+                activeAppContextService: activeContextService
+            ),
+            indicatorService: ViewModelFakeListeningIndicatorService()
+        )
+
+        sut.selectLocalEngineMode(.legacyWhisper)
+
+        XCTAssertEqual(sut.selectedLocalEngineMode, .legacyWhisper)
+    }
+
     private func makePipeline(
         recordStore: ViewModelFakeRecordStore,
         insertionService: ViewModelFakeInsertionService,
@@ -314,6 +361,8 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
             otherEnabled: false,
             previewBeforeInsert: false
         )
+        sut.selectedLocalEngineMode = .appleSpeech
+        sut.selectedLocalModel = .appleOnDevice
         return sut
     }
 

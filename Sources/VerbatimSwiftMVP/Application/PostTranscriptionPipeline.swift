@@ -14,11 +14,63 @@ struct PostTranscriptionPipelineRequest {
     let autoFormatEnabled: Bool
     let canRunAutoFormat: Bool
     let transcriptionEngineID: String
+    let localEngineMode: String?
+    let resolvedLocalBackend: String?
+    let serverConnectionMode: String?
     let transcriptionLatencyMs: Int?
+    let localModelLifecycleState: String?
     let effectiveAPIKey: String?
     let selectedRemoteLogicModelID: String
     let selectedLocalLogicModelID: String
     let forceInsertion: Bool
+
+    init(
+        transcript: Transcript,
+        recordingSessionContext: RecordingSessionContext?,
+        activeAppContextOverride: ActiveAppContext?,
+        glossaryEntries: [GlossaryEntry],
+        promptProfiles: [PromptProfile],
+        transcriptionMode: TranscriptionMode,
+        logicMode: LogicMode,
+        logicSettings: LogicSettings,
+        refineSettings: RefineSettings,
+        interactionSettings: InteractionSettings,
+        autoFormatEnabled: Bool,
+        canRunAutoFormat: Bool,
+        transcriptionEngineID: String,
+        localEngineMode: String? = nil,
+        resolvedLocalBackend: String? = nil,
+        serverConnectionMode: String? = nil,
+        transcriptionLatencyMs: Int?,
+        localModelLifecycleState: String? = nil,
+        effectiveAPIKey: String?,
+        selectedRemoteLogicModelID: String,
+        selectedLocalLogicModelID: String,
+        forceInsertion: Bool
+    ) {
+        self.transcript = transcript
+        self.recordingSessionContext = recordingSessionContext
+        self.activeAppContextOverride = activeAppContextOverride
+        self.glossaryEntries = glossaryEntries
+        self.promptProfiles = promptProfiles
+        self.transcriptionMode = transcriptionMode
+        self.logicMode = logicMode
+        self.logicSettings = logicSettings
+        self.refineSettings = refineSettings
+        self.interactionSettings = interactionSettings
+        self.autoFormatEnabled = autoFormatEnabled
+        self.canRunAutoFormat = canRunAutoFormat
+        self.transcriptionEngineID = transcriptionEngineID
+        self.localEngineMode = localEngineMode
+        self.resolvedLocalBackend = resolvedLocalBackend
+        self.serverConnectionMode = serverConnectionMode
+        self.transcriptionLatencyMs = transcriptionLatencyMs
+        self.localModelLifecycleState = localModelLifecycleState
+        self.effectiveAPIKey = effectiveAPIKey
+        self.selectedRemoteLogicModelID = selectedRemoteLogicModelID
+        self.selectedLocalLogicModelID = selectedLocalLogicModelID
+        self.forceInsertion = forceInsertion
+    }
 }
 
 struct ManualReformatRequest {
@@ -184,7 +236,11 @@ final class PostTranscriptionPipeline {
                     triggerSource: sessionContext.triggerSource,
                     triggerMode: sessionContext.triggerMode,
                     transcriptionEngine: request.transcriptionEngineID,
+                    localEngineMode: request.localEngineMode,
+                    resolvedBackend: request.resolvedLocalBackend,
+                    serverConnectionMode: request.serverConnectionMode,
                     modelID: request.transcript.modelID,
+                    localModelLifecycleState: request.localModelLifecycleState,
                     logicModelID: selectedLogicModelID(for: request.logicMode, request: request),
                     reasoningEffort: request.logicSettings.reasoningEffort.rawValue,
                     formattingProfile: selectedProfile?.id,
@@ -200,7 +256,8 @@ final class PostTranscriptionPipeline {
                     silencePeak: sessionContext.audioActivitySummary?.peakLevel,
                     silenceAverageRMS: sessionContext.audioActivitySummary?.averagePower,
                     silenceVoicedRatio: sessionContext.audioActivitySummary?.voicedRatio,
-                    skippedForSilence: false
+                    skippedForSilence: false,
+                    failureMessage: nil
                 )
             )
         }

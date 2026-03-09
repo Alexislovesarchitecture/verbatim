@@ -207,6 +207,7 @@ struct TranscriptionOptions: Equatable, Sendable {
     var chunkingStrategy: String?
     var knownSpeakerNames: [String]
     var knownSpeakerReferences: [String]
+    var localEngineMode: LocalTranscriptionEngineMode?
 
     init(
         modelID: String,
@@ -220,7 +221,8 @@ struct TranscriptionOptions: Equatable, Sendable {
         languageHint: String? = nil,
         chunkingStrategy: String? = nil,
         knownSpeakerNames: [String] = [],
-        knownSpeakerReferences: [String] = []
+        knownSpeakerReferences: [String] = [],
+        localEngineMode: LocalTranscriptionEngineMode? = nil
     ) {
         self.modelID = modelID
         self.apiKey = apiKey
@@ -234,6 +236,7 @@ struct TranscriptionOptions: Equatable, Sendable {
         self.chunkingStrategy = chunkingStrategy
         self.knownSpeakerNames = knownSpeakerNames
         self.knownSpeakerReferences = knownSpeakerReferences
+        self.localEngineMode = localEngineMode
     }
 }
 
