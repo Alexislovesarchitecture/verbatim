@@ -16,9 +16,13 @@ struct PostTranscriptionPipelineRequest {
     let transcriptionEngineID: String
     let localEngineMode: String?
     let resolvedLocalBackend: String?
+    let transport: String?
     let serverConnectionMode: String?
     let transcriptionLatencyMs: Int?
     let localModelLifecycleState: String?
+    let helperState: String?
+    let prewarmState: String?
+    let failureStage: String?
     let effectiveAPIKey: String?
     let selectedRemoteLogicModelID: String
     let selectedLocalLogicModelID: String
@@ -40,9 +44,13 @@ struct PostTranscriptionPipelineRequest {
         transcriptionEngineID: String,
         localEngineMode: String? = nil,
         resolvedLocalBackend: String? = nil,
+        transport: String? = nil,
         serverConnectionMode: String? = nil,
         transcriptionLatencyMs: Int?,
         localModelLifecycleState: String? = nil,
+        helperState: String? = nil,
+        prewarmState: String? = nil,
+        failureStage: String? = nil,
         effectiveAPIKey: String?,
         selectedRemoteLogicModelID: String,
         selectedLocalLogicModelID: String,
@@ -63,9 +71,13 @@ struct PostTranscriptionPipelineRequest {
         self.transcriptionEngineID = transcriptionEngineID
         self.localEngineMode = localEngineMode
         self.resolvedLocalBackend = resolvedLocalBackend
+        self.transport = transport
         self.serverConnectionMode = serverConnectionMode
         self.transcriptionLatencyMs = transcriptionLatencyMs
         self.localModelLifecycleState = localModelLifecycleState
+        self.helperState = helperState
+        self.prewarmState = prewarmState
+        self.failureStage = failureStage
         self.effectiveAPIKey = effectiveAPIKey
         self.selectedRemoteLogicModelID = selectedRemoteLogicModelID
         self.selectedLocalLogicModelID = selectedLocalLogicModelID
@@ -238,9 +250,13 @@ final class PostTranscriptionPipeline {
                     transcriptionEngine: request.transcriptionEngineID,
                     localEngineMode: request.localEngineMode,
                     resolvedBackend: request.resolvedLocalBackend,
+                    transport: request.transport,
                     serverConnectionMode: request.serverConnectionMode,
                     modelID: request.transcript.modelID,
                     localModelLifecycleState: request.localModelLifecycleState,
+                    helperState: request.helperState,
+                    prewarmState: request.prewarmState,
+                    failureStage: request.failureStage,
                     logicModelID: selectedLogicModelID(for: request.logicMode, request: request),
                     reasoningEffort: request.logicSettings.reasoningEffort.rawValue,
                     formattingProfile: selectedProfile?.id,

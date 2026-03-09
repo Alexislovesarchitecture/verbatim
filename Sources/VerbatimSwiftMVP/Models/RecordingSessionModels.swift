@@ -250,9 +250,13 @@ struct DiagnosticSessionRecord: Identifiable, Equatable, Sendable {
     let transcriptionEngine: String?
     let localEngineMode: String?
     let resolvedBackend: String?
+    let transport: String?
     let serverConnectionMode: String?
     let modelID: String?
     let localModelLifecycleState: String?
+    let helperState: String?
+    let prewarmState: String?
+    let failureStage: String?
     let logicModelID: String?
     let reasoningEffort: String?
     let formattingProfile: String?
@@ -280,9 +284,13 @@ struct DiagnosticSessionRecord: Identifiable, Equatable, Sendable {
         transcriptionEngine: String?,
         localEngineMode: String? = nil,
         resolvedBackend: String? = nil,
+        transport: String? = nil,
         serverConnectionMode: String? = nil,
         modelID: String?,
         localModelLifecycleState: String? = nil,
+        helperState: String? = nil,
+        prewarmState: String? = nil,
+        failureStage: String? = nil,
         logicModelID: String?,
         reasoningEffort: String?,
         formattingProfile: String?,
@@ -309,9 +317,13 @@ struct DiagnosticSessionRecord: Identifiable, Equatable, Sendable {
         self.transcriptionEngine = transcriptionEngine
         self.localEngineMode = localEngineMode
         self.resolvedBackend = resolvedBackend
+        self.transport = transport
         self.serverConnectionMode = serverConnectionMode
         self.modelID = modelID
         self.localModelLifecycleState = localModelLifecycleState
+        self.helperState = helperState
+        self.prewarmState = prewarmState
+        self.failureStage = failureStage
         self.logicModelID = logicModelID
         self.reasoningEffort = reasoningEffort
         self.formattingProfile = formattingProfile

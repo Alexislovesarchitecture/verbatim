@@ -241,13 +241,14 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
         let sql = """
         INSERT OR REPLACE INTO recording_sessions (
             session_id, started_at, duration_ms, trigger_source, trigger_mode,
-            transcription_engine, local_engine_mode, resolved_backend, server_connection_mode,
-            model_id, local_model_lifecycle_state, logic_model_id, reasoning_effort, formatting_profile,
+            transcription_engine, local_engine_mode, resolved_backend, transport, server_connection_mode,
+            model_id, local_model_lifecycle_state, helper_state, prewarm_state, failure_stage,
+            logic_model_id, reasoning_effort, formatting_profile,
             transcription_latency_ms, llm_latency_ms, total_latency_ms,
             tokens_in, cached_tokens, insertion_outcome, fallback_reason,
             target_app, target_bundle_id, silence_peak, silence_average_rms,
             silence_voiced_ratio, skipped_for_silence, failure_message
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         var statement: OpaquePointer?
@@ -264,26 +265,30 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
         bindOptionalText(record.transcriptionEngine, to: statement, index: 6)
         bindOptionalText(record.localEngineMode, to: statement, index: 7)
         bindOptionalText(record.resolvedBackend, to: statement, index: 8)
-        bindOptionalText(record.serverConnectionMode, to: statement, index: 9)
-        bindOptionalText(record.modelID, to: statement, index: 10)
-        bindOptionalText(record.localModelLifecycleState, to: statement, index: 11)
-        bindOptionalText(record.logicModelID, to: statement, index: 12)
-        bindOptionalText(record.reasoningEffort, to: statement, index: 13)
-        bindOptionalText(record.formattingProfile, to: statement, index: 14)
-        bindOptionalInt(record.transcriptionLatencyMs, to: statement, index: 15)
-        bindOptionalInt(record.llmLatencyMs, to: statement, index: 16)
-        bindOptionalInt(record.totalLatencyMs, to: statement, index: 17)
-        bindOptionalInt(record.tokensIn, to: statement, index: 18)
-        bindOptionalInt(record.cachedTokens, to: statement, index: 19)
-        bindOptionalText(record.insertionOutcome?.rawValue, to: statement, index: 20)
-        bindOptionalText(record.fallbackReason?.databaseValue, to: statement, index: 21)
-        bindOptionalText(record.targetApp, to: statement, index: 22)
-        bindOptionalText(record.targetBundleID, to: statement, index: 23)
-        bindOptionalDouble(record.silencePeak, to: statement, index: 24)
-        bindOptionalDouble(record.silenceAverageRMS, to: statement, index: 25)
-        bindOptionalDouble(record.silenceVoicedRatio, to: statement, index: 26)
-        sqlite3_bind_int(statement, 27, record.skippedForSilence ? 1 : 0)
-        bindOptionalText(record.failureMessage, to: statement, index: 28)
+        bindOptionalText(record.transport, to: statement, index: 9)
+        bindOptionalText(record.serverConnectionMode, to: statement, index: 10)
+        bindOptionalText(record.modelID, to: statement, index: 11)
+        bindOptionalText(record.localModelLifecycleState, to: statement, index: 12)
+        bindOptionalText(record.helperState, to: statement, index: 13)
+        bindOptionalText(record.prewarmState, to: statement, index: 14)
+        bindOptionalText(record.failureStage, to: statement, index: 15)
+        bindOptionalText(record.logicModelID, to: statement, index: 16)
+        bindOptionalText(record.reasoningEffort, to: statement, index: 17)
+        bindOptionalText(record.formattingProfile, to: statement, index: 18)
+        bindOptionalInt(record.transcriptionLatencyMs, to: statement, index: 19)
+        bindOptionalInt(record.llmLatencyMs, to: statement, index: 20)
+        bindOptionalInt(record.totalLatencyMs, to: statement, index: 21)
+        bindOptionalInt(record.tokensIn, to: statement, index: 22)
+        bindOptionalInt(record.cachedTokens, to: statement, index: 23)
+        bindOptionalText(record.insertionOutcome?.rawValue, to: statement, index: 24)
+        bindOptionalText(record.fallbackReason?.databaseValue, to: statement, index: 25)
+        bindOptionalText(record.targetApp, to: statement, index: 26)
+        bindOptionalText(record.targetBundleID, to: statement, index: 27)
+        bindOptionalDouble(record.silencePeak, to: statement, index: 28)
+        bindOptionalDouble(record.silenceAverageRMS, to: statement, index: 29)
+        bindOptionalDouble(record.silenceVoicedRatio, to: statement, index: 30)
+        sqlite3_bind_int(statement, 31, record.skippedForSilence ? 1 : 0)
+        bindOptionalText(record.failureMessage, to: statement, index: 32)
 
         _ = sqlite3_step(statement)
     }
@@ -292,8 +297,9 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
         fetchRows(
             sql: """
             SELECT session_id, started_at, duration_ms, trigger_source, trigger_mode,
-                   transcription_engine, local_engine_mode, resolved_backend, server_connection_mode,
-                   model_id, local_model_lifecycle_state, logic_model_id, reasoning_effort, formatting_profile,
+                   transcription_engine, local_engine_mode, resolved_backend, transport, server_connection_mode,
+                   model_id, local_model_lifecycle_state, helper_state, prewarm_state, failure_stage,
+                   logic_model_id, reasoning_effort, formatting_profile,
                    transcription_latency_ms, llm_latency_ms, total_latency_ms,
                    tokens_in, cached_tokens, insertion_outcome, fallback_reason,
                    target_app, target_bundle_id, silence_peak, silence_average_rms,
@@ -313,26 +319,30 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
                     transcriptionEngine: stringColumn(statement, index: 5),
                     localEngineMode: stringColumn(statement, index: 6),
                     resolvedBackend: stringColumn(statement, index: 7),
-                    serverConnectionMode: stringColumn(statement, index: 8),
-                    modelID: stringColumn(statement, index: 9),
-                    localModelLifecycleState: stringColumn(statement, index: 10),
-                    logicModelID: stringColumn(statement, index: 11),
-                    reasoningEffort: stringColumn(statement, index: 12),
-                    formattingProfile: stringColumn(statement, index: 13),
-                    transcriptionLatencyMs: optionalIntColumn(statement, index: 14),
-                    llmLatencyMs: optionalIntColumn(statement, index: 15),
-                    totalLatencyMs: optionalIntColumn(statement, index: 16),
-                    tokensIn: optionalIntColumn(statement, index: 17),
-                    cachedTokens: optionalIntColumn(statement, index: 18),
-                    insertionOutcome: stringColumn(statement, index: 19).flatMap(InsertionOutcome.init(rawValue:)),
-                    fallbackReason: stringColumn(statement, index: 20).flatMap(ClipboardFallbackReason.init(databaseValue:)),
-                    targetApp: stringColumn(statement, index: 21),
-                    targetBundleID: stringColumn(statement, index: 22),
-                    silencePeak: optionalDoubleColumn(statement, index: 23),
-                    silenceAverageRMS: optionalDoubleColumn(statement, index: 24),
-                    silenceVoicedRatio: optionalDoubleColumn(statement, index: 25),
-                    skippedForSilence: sqlite3_column_int(statement, 26) != 0,
-                    failureMessage: stringColumn(statement, index: 27)
+                    transport: stringColumn(statement, index: 8),
+                    serverConnectionMode: stringColumn(statement, index: 9),
+                    modelID: stringColumn(statement, index: 10),
+                    localModelLifecycleState: stringColumn(statement, index: 11),
+                    helperState: stringColumn(statement, index: 12),
+                    prewarmState: stringColumn(statement, index: 13),
+                    failureStage: stringColumn(statement, index: 14),
+                    logicModelID: stringColumn(statement, index: 15),
+                    reasoningEffort: stringColumn(statement, index: 16),
+                    formattingProfile: stringColumn(statement, index: 17),
+                    transcriptionLatencyMs: optionalIntColumn(statement, index: 18),
+                    llmLatencyMs: optionalIntColumn(statement, index: 19),
+                    totalLatencyMs: optionalIntColumn(statement, index: 20),
+                    tokensIn: optionalIntColumn(statement, index: 21),
+                    cachedTokens: optionalIntColumn(statement, index: 22),
+                    insertionOutcome: stringColumn(statement, index: 23).flatMap(InsertionOutcome.init(rawValue:)),
+                    fallbackReason: stringColumn(statement, index: 24).flatMap(ClipboardFallbackReason.init(databaseValue:)),
+                    targetApp: stringColumn(statement, index: 25),
+                    targetBundleID: stringColumn(statement, index: 26),
+                    silencePeak: optionalDoubleColumn(statement, index: 27),
+                    silenceAverageRMS: optionalDoubleColumn(statement, index: 28),
+                    silenceVoicedRatio: optionalDoubleColumn(statement, index: 29),
+                    skippedForSilence: sqlite3_column_int(statement, 30) != 0,
+                    failureMessage: stringColumn(statement, index: 31)
                 )
             }
         )
@@ -771,6 +781,10 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
             migrateRecordingSessionsToVersion6()
             setUserVersion(6)
         }
+        if currentVersion < 7 {
+            migrateRecordingSessionsToVersion7()
+            setUserVersion(7)
+        }
 
         if tableExists("transcriptions") == false {
             createVersion1Tables()
@@ -905,9 +919,13 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
             transcription_engine TEXT,
             local_engine_mode TEXT,
             resolved_backend TEXT,
+            transport TEXT,
             server_connection_mode TEXT,
             model_id TEXT,
             local_model_lifecycle_state TEXT,
+            helper_state TEXT,
+            prewarm_state TEXT,
+            failure_stage TEXT,
             logic_model_id TEXT,
             reasoning_effort TEXT,
             formatting_profile TEXT,
@@ -949,6 +967,14 @@ final class AppDatabase: TranscriptRecordStoreProtocol {
         addColumnIfNeeded(table: "recording_sessions", column: "local_engine_mode", definition: "TEXT")
         addColumnIfNeeded(table: "recording_sessions", column: "resolved_backend", definition: "TEXT")
         addColumnIfNeeded(table: "recording_sessions", column: "server_connection_mode", definition: "TEXT")
+    }
+
+    private func migrateRecordingSessionsToVersion7() {
+        guard tableExists("recording_sessions") else { return }
+        addColumnIfNeeded(table: "recording_sessions", column: "transport", definition: "TEXT")
+        addColumnIfNeeded(table: "recording_sessions", column: "helper_state", definition: "TEXT")
+        addColumnIfNeeded(table: "recording_sessions", column: "prewarm_state", definition: "TEXT")
+        addColumnIfNeeded(table: "recording_sessions", column: "failure_stage", definition: "TEXT")
     }
 
     private func migrateLegacyTranscriptHistoryIfNeeded() {

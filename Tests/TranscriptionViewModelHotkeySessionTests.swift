@@ -1,3 +1,5 @@
+import AVFoundation
+import Speech
 import XCTest
 @testable import VerbatimSwiftMVP
 
@@ -135,7 +137,7 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
         XCTAssertEqual(indicatorService.lastOutcome, .noSpeechDetected)
         XCTAssertEqual(recordStore.diagnosticSessions.count, 1)
         XCTAssertTrue(recordStore.diagnosticSessions[0].skippedForSilence)
-        XCTAssertEqual(recordStore.diagnosticSessions[0].logicModelID, sut.selectedRemoteLogicModelID)
+        XCTAssertEqual(recordStore.diagnosticSessions[0].logicModelID, sut.selectedLocalLogicModelID)
         XCTAssertEqual(recordStore.diagnosticSessions[0].reasoningEffort, sut.logicSettings.reasoningEffort.rawValue)
     }
 
@@ -204,7 +206,7 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
         XCTAssertEqual(recordStore.records.first?.styleCategory, .personal)
         XCTAssertEqual(recordStore.records.first?.bundleID, "com.apple.MobileSMS")
         XCTAssertEqual(insertionService.lastTarget?.bundleID, "com.apple.MobileSMS")
-        XCTAssertEqual(recordStore.diagnosticSessions.first?.logicModelID, sut.selectedRemoteLogicModelID)
+        XCTAssertEqual(recordStore.diagnosticSessions.first?.logicModelID, sut.selectedLocalLogicModelID)
         XCTAssertEqual(recordStore.diagnosticSessions.first?.reasoningEffort, sut.logicSettings.reasoningEffort.rawValue)
         XCTAssertEqual(sut.statusMessage, "Inserted.")
     }
@@ -271,7 +273,18 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
         XCTAssertTrue(sut.hotkeyStatusMessage.contains("Using Control + Option + Space instead"))
     }
 
-    func testLegacyWhisperLocalEngineModeCanBeSelected() {
+    func testViewModelDefaultsToAppleLocalOnlyEvenWhenRemoteStateWasPersisted() {
+        UserDefaults.standard.set(TranscriptionMode.remote.rawValue, forKey: "VerbatimSwiftMVP.TranscriptionMode")
+        UserDefaults.standard.set(LogicMode.remote.rawValue, forKey: "VerbatimSwiftMVP.LogicMode")
+        UserDefaults.standard.set(LocalTranscriptionModel.whisperBase.rawValue, forKey: "VerbatimSwiftMVP.LocalModelID")
+        UserDefaults.standard.set(LocalTranscriptionEngineMode.legacyWhisper.rawValue, forKey: "VerbatimSwiftMVP.LocalEngineMode")
+        defer {
+            UserDefaults.standard.removeObject(forKey: "VerbatimSwiftMVP.TranscriptionMode")
+            UserDefaults.standard.removeObject(forKey: "VerbatimSwiftMVP.LogicMode")
+            UserDefaults.standard.removeObject(forKey: "VerbatimSwiftMVP.LocalModelID")
+            UserDefaults.standard.removeObject(forKey: "VerbatimSwiftMVP.LocalEngineMode")
+        }
+
         let activeContextService = SequencedActiveAppContextService(
             contexts: [
                 ActiveAppContext(
@@ -313,9 +326,131 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
             indicatorService: ViewModelFakeListeningIndicatorService()
         )
 
-        sut.selectLocalEngineMode(.legacyWhisper)
+        XCTAssertEqual(sut.transcriptionMode, .local)
+        XCTAssertEqual(sut.logicMode, .local)
+        XCTAssertEqual(sut.selectedLocalEngineMode, .appleSpeech)
+        XCTAssertEqual(sut.selectedLocalModel, .appleOnDevice)
+    }
 
-        XCTAssertEqual(sut.selectedLocalEngineMode, .legacyWhisper)
+    func testAppleSpeechInstallStateSurfacesPrimaryActionAndProgress() async throws {
+        let runtimeManager = ViewModelFakeAppleSpeechRuntimeManager(
+            status: .installRequired(locale: Locale(identifier: "en_US")),
+            installResult: .ready(locale: Locale(identifier: "en_US"))
+        )
+        let activeContextService = SequencedActiveAppContextService(
+            contexts: [
+                ActiveAppContext(
+                    appName: "Messages",
+                    bundleID: "com.apple.MobileSMS",
+                    processIdentifier: 9,
+                    styleCategory: .personal,
+                    windowTitle: "Chat",
+                    focusedElementRole: "AXTextArea"
+                )
+            ]
+        )
+        let recordStore = ViewModelFakeRecordStore()
+        let insertionService = ViewModelFakeInsertionService()
+        let sut = makeViewModel(
+            coordinator: TranscriptionCoordinator(
+                recorder: ViewModelFakeAudioRecorder(
+                    artifact: AudioRecordingArtifact(
+                        audioFileURL: temporaryAudioURL(),
+                        frameStream: makeFrameStream(frames: [])
+                    )
+                ),
+                remoteEngine: ViewModelFakeRemoteEngine(
+                    transcript: Transcript.empty(modelID: "apple-on-device", responseFormat: "text")
+                ),
+                localEngine: ViewModelFakeLocalEngine(
+                    transcript: Transcript.empty(modelID: "apple-on-device", responseFormat: "text")
+                ),
+                modelCatalogService: ViewModelFakeModelCatalog()
+            ),
+            recordStore: recordStore,
+            insertionService: insertionService,
+            activeAppContextService: activeContextService,
+            pipeline: makePipeline(
+                recordStore: recordStore,
+                insertionService: insertionService,
+                activeAppContextService: activeContextService
+            ),
+            indicatorService: ViewModelFakeListeningIndicatorService(),
+            appleSpeechRuntimeManager: runtimeManager
+        )
+
+        sut.refreshAppleSpeechRuntime()
+        try await waitUntil { sut.appleSpeechPrimaryActionTitle == "Install" }
+        XCTAssertEqual(sut.localModelBadgeText(.appleOnDevice), "Install")
+        XCTAssertFalse(sut.canStartForCurrentMode)
+
+        sut.installAppleSpeechAssets()
+        try await waitUntil { sut.appleSpeechRuntimeStatus.isReady }
+
+        let progress = await runtimeManager.reportedProgressValues
+        XCTAssertFalse(progress.isEmpty)
+        XCTAssertNil(sut.appleSpeechPrimaryActionTitle)
+        XCTAssertEqual(sut.localModelBadgeText(.appleOnDevice), "Ready")
+        XCTAssertTrue(sut.canStartForCurrentMode)
+    }
+
+    func testLocalTranscriptionStillSucceedsWhenLocalLogicRuntimeIsUnavailable() async throws {
+        let recordStore = ViewModelFakeRecordStore()
+        let insertionService = ViewModelFakeInsertionService()
+        let activeContextService = SequencedActiveAppContextService(
+            contexts: [
+                ActiveAppContext(
+                    appName: "Notes",
+                    bundleID: "com.apple.Notes",
+                    processIdentifier: 21,
+                    styleCategory: .other,
+                    windowTitle: "Scratch",
+                    focusedElementRole: "AXTextArea"
+                )
+            ]
+        )
+        let transcript = Transcript(
+            rawText: "hello local logic",
+            segments: [],
+            tokenLogprobs: nil,
+            lowConfidenceSpans: [],
+            modelID: "apple-on-device",
+            responseFormat: "text"
+        )
+        let coordinator = TranscriptionCoordinator(
+            recorder: ViewModelFakeAudioRecorder(
+                artifact: AudioRecordingArtifact(
+                    audioFileURL: temporaryAudioURL(),
+                    frameStream: makeFrameStream(frames: Array(repeating: makeFrame(amplitude: 9_000, sampleCount: 1600), count: 3))
+                )
+            ),
+            remoteEngine: ViewModelFakeRemoteEngine(transcript: transcript),
+            localEngine: ViewModelFakeLocalEngine(transcript: transcript),
+            modelCatalogService: ViewModelFakeModelCatalog()
+        )
+        let pipeline = makePipeline(
+            recordStore: recordStore,
+            insertionService: insertionService,
+            activeAppContextService: activeContextService
+        )
+        let sut = makeViewModel(
+            coordinator: coordinator,
+            recordStore: recordStore,
+            insertionService: insertionService,
+            activeAppContextService: activeContextService,
+            pipeline: pipeline,
+            indicatorService: ViewModelFakeListeningIndicatorService()
+        )
+
+        sut.autoFormatEnabled = true
+        sut.start(fromHotkey: false)
+        try await waitUntil { sut.state == .recording }
+
+        sut.stop()
+        try await waitUntil { sut.state == .done }
+
+        XCTAssertEqual(sut.transcript?.rawText, "hello local logic")
+        XCTAssertEqual(recordStore.records.first?.rawText, "hello local logic")
     }
 
     private func makePipeline(
@@ -341,9 +476,12 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
         activeAppContextService: SequencedActiveAppContextService,
         pipeline: PostTranscriptionPipeline,
         indicatorService: ViewModelFakeListeningIndicatorService,
-        globalHotkeyService: GlobalHotkeyServiceProtocol = ViewModelFakeGlobalHotkeyService()
+        globalHotkeyService: GlobalHotkeyServiceProtocol = ViewModelFakeGlobalHotkeyService(),
+        appleSpeechRuntimeManager: AppleSpeechRuntimeManaging = ViewModelFakeAppleSpeechRuntimeManager()
     ) -> TranscriptionViewModel {
         let sut = TranscriptionViewModel(
+            appleSpeechRuntimeManager: appleSpeechRuntimeManager,
+            appleSpeechPermissionProvider: ViewModelFakeAppleSpeechPermissionProvider(),
             transcriptionCoordinator: coordinator,
             activeAppContextService: activeAppContextService,
             promptProfileStore: PromptProfileStore(),
@@ -361,8 +499,6 @@ final class TranscriptionViewModelHotkeySessionTests: XCTestCase {
             otherEnabled: false,
             previewBeforeInsert: false
         )
-        sut.selectedLocalEngineMode = .appleSpeech
-        sut.selectedLocalModel = .appleOnDevice
         return sut
     }
 
@@ -594,4 +730,46 @@ private final class ViewModelFakeListeningIndicatorService: ListeningIndicatorSe
         lastOutcome = outcome
     }
     func hideListening() {}
+}
+
+private actor ViewModelFakeAppleSpeechRuntimeManager: AppleSpeechRuntimeManaging {
+    private var currentStatus: AppleSpeechRuntimeStatus
+    private let installResult: AppleSpeechRuntimeStatus
+    private(set) var reportedProgressValues: [Double?] = []
+
+    init(
+        status: AppleSpeechRuntimeStatus = .ready(locale: Locale(identifier: "en_US")),
+        installResult: AppleSpeechRuntimeStatus = .ready(locale: Locale(identifier: "en_US"))
+    ) {
+        self.currentStatus = status
+        self.installResult = installResult
+    }
+
+    func status(for preferredLocale: Locale) async -> AppleSpeechRuntimeStatus {
+        currentStatus
+    }
+
+    func installAssets(
+        for preferredLocale: Locale,
+        progress: (@Sendable (Double?) async -> Void)?
+    ) async throws -> AppleSpeechRuntimeStatus {
+        reportedProgressValues.append(0.25)
+        await progress?(0.25)
+        currentStatus = installResult
+        reportedProgressValues.append(1)
+        await progress?(1)
+        return installResult
+    }
+
+    func transcribe(audioFileURL: URL, preferredLocale: Locale) async throws -> AppleSpeechRecognitionSnapshot {
+        AppleSpeechRecognitionSnapshot(
+            text: "hello",
+            segments: [.init(start: 0, end: 1, text: "hello")]
+        )
+    }
+}
+
+private struct ViewModelFakeAppleSpeechPermissionProvider: AppleSpeechPermissionProviding {
+    func microphoneAuthorizationStatus() -> AVAuthorizationStatus { .authorized }
+    func speechAuthorizationStatus() -> SFSpeechRecognizerAuthorizationStatus { .authorized }
 }

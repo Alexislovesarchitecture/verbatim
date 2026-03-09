@@ -1023,18 +1023,14 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             panelHeading(
                 title: "Speech Engine",
-                subtitle: "Choose whether transcription runs locally or through OpenAI."
+                subtitle: "Transcription is local-only in this build and uses Apple Dictation."
             )
 
-            Picker("Transcription Mode", selection: $viewModel.transcriptionMode) {
-                ForEach(TranscriptionMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .disabled(isBusy)
+            Text("Verbatim records locally, transcribes with Apple’s on-device Speech framework, and never requires an API key for speech recognition.")
+                .font(.body)
+                .foregroundStyle(VerbatimPalette.ink)
 
-            Text(viewModel.transcriptionMode.subtitle)
+            Text("Local-only Apple Dictation")
                 .font(.caption)
                 .foregroundStyle(VerbatimPalette.mutedInk)
         }
@@ -1044,27 +1040,35 @@ struct ContentView: View {
     private var localTranscriptionOverviewCard: some View {
         VStack(alignment: .leading, spacing: 14) {
             panelHeading(
-                title: "Local Mode",
-                subtitle: "Local transcription avoids network round-trips and keeps setup simple."
+                title: "Apple Dictation",
+                subtitle: "Speech assets are managed by macOS for the current locale."
             )
 
-            Text("Switch to Remote when you want OpenAI transcription models and their richer feature set.")
+            Text(viewModel.localTranscriptionRuntimeStatusMessage)
                 .font(.body)
-                .foregroundStyle(VerbatimPalette.ink)
+                .foregroundStyle(viewModel.isLocalTranscriptionRuntimeStatusError ? Color.orange : VerbatimPalette.ink)
 
-            Picker("Local engine", selection: $viewModel.selectedLocalEngineMode) {
-                ForEach(LocalTranscriptionEngineMode.userFacingCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
+            if let resolvedLocale = viewModel.appleSpeechRuntimeStatus.resolvedLocale {
+                Text("Resolved locale: \(resolvedLocale.identifier)")
+                    .font(.caption)
+                    .foregroundStyle(VerbatimPalette.mutedInk)
             }
-            .pickerStyle(.segmented)
-            .disabled(isBusy)
 
-            Text(viewModel.selectedLocalEngineMode.subtitle)
-                .font(.caption)
-                .foregroundStyle(VerbatimPalette.mutedInk)
+            if let actionTitle = viewModel.appleSpeechPrimaryActionTitle {
+                Button(actionTitle, systemImage: "arrow.down.circle") {
+                    viewModel.installAppleSpeechAssets()
+                }
+                .applyGlassButtonStyle(prominent: true)
+                .disabled(!viewModel.canInstallAppleSpeechAssets)
+            }
 
-            Text("Apple On-Device is ready immediately. Choose WhisperKit for app-managed installs or Legacy Whisper for existing whisper.cpp models.")
+            if let progressValue = viewModel.appleSpeechInstallProgressValue,
+               viewModel.appleSpeechRuntimeStatus.isInstallingAssets {
+                ProgressView(value: progressValue)
+                    .progressViewStyle(.linear)
+            }
+
+            Text("Microphone and speech permissions are checked directly on this Mac. Apple Dictation stays inside the app process.")
                 .font(.caption)
                 .foregroundStyle(VerbatimPalette.mutedInk)
         }
@@ -1075,66 +1079,17 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 18) {
             panelHeading(
                 title: "Model Selection",
-                subtitle: "Pick the speech model first, then tune the controls below."
+                subtitle: "Apple Dictation is the only speech path exposed in this build."
             )
 
-            if viewModel.transcriptionMode == .remote {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("Remote models")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(VerbatimPalette.mutedInk)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Local models")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
 
-                        Spacer()
-
-                        Button("Refresh models", systemImage: "arrow.clockwise") {
-                            viewModel.refreshRemoteModels()
-                        }
-                        .applyGlassButtonStyle()
-                        .disabled(isBusy || !viewModel.hasApiKeyConfigured)
-                    }
-
-                    Toggle("Show advanced", isOn: $viewModel.showAdvancedTranscriptionModels)
-                        .disabled(isBusy)
-
-                    if case .loading = viewModel.remoteModelsLoadState {
-                        ProgressView()
-                    }
-
-                    Text(viewModel.remoteTranscriptionStatusMessage)
-                        .font(.caption)
-                        .foregroundStyle(viewModel.isRemoteModelsStatusError ? Color.orange : VerbatimPalette.mutedInk)
-
-                    VStack(spacing: 10) {
-                        ForEach(viewModel.remoteTranscriptionModels) { model in
-                            Button {
-                                viewModel.selectRemoteTranscriptionModel(model.entry.id)
-                            } label: {
-                                modelRow(
-                                    title: model.title,
-                                    subtitle: model.entry.notes ?? model.entry.id,
-                                    isSelected: viewModel.selectedRemoteModelID == model.entry.id,
-                                    badgeText: model.isAvailable ? "OpenAI" : "Unavailable",
-                                    isAvailable: model.isAvailable,
-                                    notes: "",
-                                    accent: .amber
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isBusy || !model.isAvailable)
-                        }
-                    }
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Local models")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(VerbatimPalette.mutedInk)
-
-                    VStack(spacing: 10) {
-                        ForEach(LocalTranscriptionModel.allCases) { model in
-                            localModelRow(model)
-                        }
+                VStack(spacing: 10) {
+                    ForEach(LocalTranscriptionModel.userFacingCases) { model in
+                        localModelRow(model)
                     }
                 }
             }
@@ -1186,11 +1141,11 @@ struct ContentView: View {
                     .foregroundStyle(viewModel.localModelBadgeText(model) == "Retry" || !isAvailable ? Color.orange : VerbatimPalette.mutedInk)
             }
 
-            if model.isWhisperModel {
+            if model.isAppleModel || model.isWhisperModel {
                 if let actionTitle {
                     HStack(spacing: 10) {
                         Button(actionTitle, systemImage: actionTitle == "Install" ? "shippingbox" : "arrow.down.circle") {
-                            viewModel.performPrimaryWhisperAction(for: model)
+                            viewModel.performPrimaryLocalModelAction(for: model)
                         }
                         .applyGlassButtonStyle(prominent: true)
                         .disabled(!canRunPrimary)
@@ -1346,25 +1301,12 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 16) {
             panelHeading(
                 title: "Logic Engine",
-                subtitle: "Use OpenAI responses remotely or keep refinement local through Ollama."
+                subtitle: "Transcript cleanup stays local through Ollama or falls back to deterministic cleanup."
             )
 
-            Picker("Logic mode", selection: $viewModel.logicMode) {
-                ForEach(LogicMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            if viewModel.logicMode == .remote {
-                Text("Remote logic uses `/v1/responses` with structured output.")
-                    .font(.caption)
-                    .foregroundStyle(VerbatimPalette.mutedInk)
-            } else {
-                Text("Local logic uses Ollama with hidden thinking by default, then returns only the cleaned transcript.")
-                    .font(.caption)
-                    .foregroundStyle(VerbatimPalette.mutedInk)
-            }
+            Text("Local logic uses Ollama with hidden thinking by default. If Ollama is unavailable, transcription still finishes with deterministic cleanup only.")
+                .font(.caption)
+                .foregroundStyle(VerbatimPalette.mutedInk)
         }
         .applyLiquidCardStyle(cornerRadius: 28, tone: .frost, padding: 22)
     }
@@ -1376,71 +1318,49 @@ struct ContentView: View {
                 subtitle: "Pick the refinement model and confirm runtime availability when local mode is active."
             )
 
-            if viewModel.logicMode == .remote {
+            VStack(alignment: .leading, spacing: 14) {
                 VStack(spacing: 10) {
-                    ForEach(viewModel.remoteLogicModels) { model in
+                    ForEach(viewModel.localLogicModels) { model in
                         Button {
-                            viewModel.selectRemoteLogicModel(model.entry.id)
+                            viewModel.selectLocalLogicModel(model.entry.id)
                         } label: {
                             modelRow(
                                 title: model.title,
                                 subtitle: model.entry.notes ?? model.entry.id,
-                                isSelected: viewModel.selectedRemoteLogicModelID == model.entry.id,
-                                badgeText: model.isAvailable ? "OpenAI" : "Unavailable",
-                                isAvailable: model.isAvailable,
-                                notes: "",
+                                isSelected: viewModel.selectedLocalLogicModelID == model.entry.id,
+                                badgeText: model.entry.isEnabled ? "Available" : "Phase 2",
+                                isAvailable: model.entry.isEnabled,
+                                notes: model.entry.isEnabled ? "" : "Requires local runtime",
                                 accent: .violet
                             )
                         }
                         .buttonStyle(.plain)
-                        .disabled(isBusy || !model.isAvailable)
+                        .disabled(isBusy || !model.entry.isEnabled)
                     }
                 }
-            } else {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(spacing: 10) {
-                        ForEach(viewModel.localLogicModels) { model in
-                            Button {
-                                viewModel.selectLocalLogicModel(model.entry.id)
-                            } label: {
-                                modelRow(
-                                    title: model.title,
-                                    subtitle: model.entry.notes ?? model.entry.id,
-                                    isSelected: viewModel.selectedLocalLogicModelID == model.entry.id,
-                                    badgeText: model.entry.isEnabled ? "Available" : "Phase 2",
-                                    isAvailable: model.entry.isEnabled,
-                                    notes: model.entry.isEnabled ? "" : "Requires local runtime",
-                                    accent: .violet
-                                )
-                            }
-                            .buttonStyle(.plain)
-                            .disabled(isBusy || !model.entry.isEnabled)
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Local runtime")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+
+                    Text("Uses downloaded local models via `ollama run`, with no localhost API dependency.")
+                        .font(.caption)
+                        .foregroundStyle(VerbatimPalette.mutedInk)
+
+                    HStack(spacing: 10) {
+                        Button("Check runtime", systemImage: "bolt.badge.checkmark") {
+                            viewModel.checkLocalLogicRuntime()
                         }
-                    }
+                        .applyGlassButtonStyle()
+                        .disabled(isBusy)
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Local runtime")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(VerbatimPalette.mutedInk)
-
-                        Text("Uses downloaded local models via `ollama run`, with no localhost API dependency.")
+                        Text(viewModel.localLogicRuntimeStatusMessage)
                             .font(.caption)
-                            .foregroundStyle(VerbatimPalette.mutedInk)
-
-                        HStack(spacing: 10) {
-                            Button("Check runtime", systemImage: "bolt.badge.checkmark") {
-                                viewModel.checkLocalLogicRuntime()
-                            }
-                            .applyGlassButtonStyle()
-                            .disabled(isBusy)
-
-                            Text(viewModel.localLogicRuntimeStatusMessage)
-                                .font(.caption)
-                                .foregroundStyle(viewModel.isLocalLogicRuntimeStatusError ? Color.orange : VerbatimPalette.mutedInk)
-                        }
+                            .foregroundStyle(viewModel.isLocalLogicRuntimeStatusError ? Color.orange : VerbatimPalette.mutedInk)
                     }
-                    .applyInsetWellStyle(cornerRadius: 20, padding: 16)
                 }
+                .applyInsetWellStyle(cornerRadius: 20, padding: 16)
             }
         }
     }
@@ -1488,13 +1408,7 @@ struct ContentView: View {
                 .disabled(!viewModel.canConfigureReasoningEffort)
             }
 
-            if !viewModel.canConfigureReasoningEffort && viewModel.logicMode == .remote {
-                Text("Reasoning effort applies to GPT-5 logic models.")
-                    .font(.caption2)
-                    .foregroundStyle(VerbatimPalette.mutedInk)
-            }
-
-            if viewModel.logicMode == .local, viewModel.canConfigureReasoningEffort {
+            if viewModel.canConfigureReasoningEffort {
                 Text("For local GPT OSS, this maps to Ollama's thinking level. Visible thinking stays hidden so only the final cleaned text lands in the transcript.")
                     .font(.caption2)
                     .foregroundStyle(VerbatimPalette.mutedInk)

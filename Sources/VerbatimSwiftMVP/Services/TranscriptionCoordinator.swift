@@ -40,10 +40,12 @@ final class TranscriptionCoordinator {
             let routeTracker = LocalTranscriptionRouteTracker()
             let legacyManager = WhisperModelManager()
             let whisperKitManager = WhisperKitModelManager()
+            let whisperKitServerManager = WhisperKitServerManager()
             return ManagedLocalTranscriptionService(
                 whisperKitService: WhisperKitLocalTranscriptionService(
                     modelManager: whisperKitManager,
-                    routeTracker: routeTracker
+                    routeTracker: routeTracker,
+                    serverManager: whisperKitServerManager
                 ),
                 whisperService: WhisperLocalTranscriptionService(modelManager: legacyManager),
                 whisperCppModelManager: legacyManager,

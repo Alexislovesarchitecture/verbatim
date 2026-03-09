@@ -18,6 +18,7 @@ protocol AudioRecorderServiceProtocol: AnyObject {
 
 enum AudioRecorderError: LocalizedError {
     case microphonePermissionDenied
+    case missingMicrophoneUsageDescription(String)
     case alreadyRecording
     case notRecording
     case fileCreationFailed
@@ -29,6 +30,8 @@ enum AudioRecorderError: LocalizedError {
         switch self {
         case .microphonePermissionDenied:
             return "Microphone access is denied. Enable it in System Settings > Privacy & Security."
+        case .missingMicrophoneUsageDescription(let message):
+            return message
         case .alreadyRecording:
             return "Recording is already in progress."
         case .notRecording:
@@ -46,14 +49,12 @@ enum AudioRecorderError: LocalizedError {
 }
 @MainActor
 final class AudioRecorderService: AudioRecorderServiceProtocol {
-    private static let liveSampleRate: Double = 16_000
-    private static let liveChannelCount: AVAudioChannelCount = 1
-
     // The engine tap executes off the main actor, so keep audio IO state behind a lock
     // instead of bouncing every buffer through the view model/UI actor.
     private final class RecordingIOState: @unchecked Sendable {
         struct Snapshot {
             let didWriteAudio: Bool
+            let conversionErrorDescription: String?
             let writeErrorDescription: String?
         }
 
@@ -66,11 +67,12 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
         private var didLogConversionFailure = false
         private var didLogWriteFailure = false
         private var didWriteAudio = false
+        private var conversionErrorDescription: String?
         private var writeErrorDescription: String?
 
         func configure(
             audioFile: AVAudioFile,
-            converter: AVAudioConverter,
+            converter: AVAudioConverter?,
             processingFormat: AVAudioFormat,
             continuation: AsyncStream<AudioPCM16Frame>.Continuation
         ) {
@@ -83,6 +85,7 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             didLogConversionFailure = false
             didLogWriteFailure = false
             didWriteAudio = false
+            conversionErrorDescription = nil
             writeErrorDescription = nil
             lock.unlock()
         }
@@ -92,6 +95,7 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             let activeContinuation = continuation
             let snapshot = Snapshot(
                 didWriteAudio: didWriteAudio,
+                conversionErrorDescription: conversionErrorDescription,
                 writeErrorDescription: writeErrorDescription
             )
             audioFile = nil
@@ -102,6 +106,7 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             didLogConversionFailure = false
             didLogWriteFailure = false
             didWriteAudio = false
+            conversionErrorDescription = nil
             writeErrorDescription = nil
             lock.unlock()
 
@@ -113,33 +118,40 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             lock.lock()
             defer { lock.unlock() }
 
-            guard let converter, let processingFormat else {
+            guard let processingFormat else {
                 return
             }
 
-            let convertedFrameEstimate = Int(
-                Double(buffer.frameLength) * processingFormat.sampleRate / buffer.format.sampleRate
-            ) + 64
-            // AVAudioConverter.convert(to:from:) requires output capacity >= input frameLength.
-            let targetFrameCapacity = AVAudioFrameCount(max(Int(buffer.frameLength), max(1, convertedFrameEstimate)))
-            guard let targetBuffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: targetFrameCapacity) else {
-                return
-            }
-
-            do {
-                try converter.convert(to: targetBuffer, from: buffer)
-            } catch {
-                if !didLogConversionFailure {
-                    didLogConversionFailure = true
-                    audioRecorderLogger.error("Live audio conversion failed: \(error.localizedDescription, privacy: .public)")
+            let outputBuffer: AVAudioPCMBuffer
+            if let converter {
+                let convertedFrameEstimate = Int(
+                    Double(buffer.frameLength) * processingFormat.sampleRate / buffer.format.sampleRate
+                ) + 64
+                // AVAudioConverter.convert(to:from:) requires output capacity >= input frameLength.
+                let targetFrameCapacity = AVAudioFrameCount(max(Int(buffer.frameLength), max(1, convertedFrameEstimate)))
+                guard let targetBuffer = AVAudioPCMBuffer(pcmFormat: processingFormat, frameCapacity: targetFrameCapacity) else {
+                    return
                 }
-                return
+
+                do {
+                    try converter.convert(to: targetBuffer, from: buffer)
+                } catch {
+                    conversionErrorDescription = error.localizedDescription
+                    if !didLogConversionFailure {
+                        didLogConversionFailure = true
+                        audioRecorderLogger.error("Live audio conversion failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                    return
+                }
+                outputBuffer = targetBuffer
+            } else {
+                outputBuffer = buffer
             }
-            guard targetBuffer.frameLength > 0 else { return }
-            guard let pcm = targetBuffer.floatChannelData else { return }
+            guard outputBuffer.frameLength > 0 else { return }
+            guard let pcm = outputBuffer.floatChannelData else { return }
 
             do {
-                try audioFile?.write(from: targetBuffer)
+                try audioFile?.write(from: outputBuffer)
                 didWriteAudio = true
             } catch {
                 writeErrorDescription = error.localizedDescription
@@ -149,14 +161,14 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
                 }
             }
 
-            let frameData = encodePCM16(from: pcm[0], frameLength: Int(targetBuffer.frameLength))
+            let frameData = encodePCM16(from: pcm[0], frameLength: Int(outputBuffer.frameLength))
 
             sequenceNumber += 1
             continuation?.yield(
                 AudioPCM16Frame(
                     sequenceNumber: sequenceNumber,
-                    sampleRate: processingFormat.sampleRate,
-                    channelCount: Int(processingFormat.channelCount),
+                    sampleRate: outputBuffer.format.sampleRate,
+                    channelCount: Int(outputBuffer.format.channelCount),
                     samples: frameData
                 )
             )
@@ -192,6 +204,10 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             throw AudioRecorderError.alreadyRecording
         }
 
+        if let missingUsageDescription = AppPrivacyUsageDescriptionValidator.missingUsageDescription(.microphone) {
+            throw AudioRecorderError.missingMicrophoneUsageDescription(missingUsageDescription)
+        }
+
         let permitted = await requestMicrophonePermission()
         guard permitted else {
             throw AudioRecorderError.microphonePermissionDenied
@@ -199,11 +215,10 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
 
         let inputNode = engine.inputNode
         let sourceFormat = inputNode.outputFormat(forBus: 0)
-
         guard let processingFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
-            sampleRate: Self.liveSampleRate,
-            channels: Self.liveChannelCount,
+            sampleRate: sourceFormat.sampleRate,
+            channels: sourceFormat.channelCount,
             interleaved: false
         ) else {
             throw AudioRecorderError.conversionSetupFailed
@@ -213,16 +228,25 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
         let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
         cleanup(fileURL)
 
-        guard let converter = AVAudioConverter(from: sourceFormat, to: processingFormat) else {
-            throw AudioRecorderError.conversionSetupFailed
+        let converter: AVAudioConverter?
+        if sourceFormat.commonFormat == processingFormat.commonFormat,
+           sourceFormat.sampleRate == processingFormat.sampleRate,
+           sourceFormat.channelCount == processingFormat.channelCount,
+           sourceFormat.isInterleaved == processingFormat.isInterleaved {
+            converter = nil
+        } else {
+            guard let createdConverter = AVAudioConverter(from: sourceFormat, to: processingFormat) else {
+                throw AudioRecorderError.conversionSetupFailed
+            }
+            converter = createdConverter
         }
 
         do {
             let audioFile = try AVAudioFile(
                 forWriting: fileURL,
-                settings: processingFormat.settings,
-                commonFormat: processingFormat.commonFormat,
-                interleaved: processingFormat.isInterleaved
+                settings: sourceFormat.settings,
+                commonFormat: sourceFormat.commonFormat,
+                interleaved: sourceFormat.isInterleaved
             )
             let (stream, continuation) = makeLiveFrameStream()
 
@@ -235,7 +259,7 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
             outputURL = fileURL
             liveFrameStream = stream
             audioRecorderLogger.info(
-                "Preparing recorder. sourceRate=\(sourceFormat.sampleRate, privacy: .public) sourceChannels=\(sourceFormat.channelCount, privacy: .public) targetRate=\(processingFormat.sampleRate, privacy: .public) targetChannels=\(processingFormat.channelCount, privacy: .public) file=\(fileURL.path, privacy: .public)"
+                "Preparing recorder. sourceRate=\(sourceFormat.sampleRate, privacy: .public) sourceChannels=\(sourceFormat.channelCount, privacy: .public) sourceFormat=\(sourceFormat.commonFormat.rawValue, privacy: .public) targetRate=\(processingFormat.sampleRate, privacy: .public) targetChannels=\(processingFormat.channelCount, privacy: .public) converterActive=\(converter != nil, privacy: .public) file=\(fileURL.path, privacy: .public)"
             )
         } catch {
             throw AudioRecorderError.fileCreationFailed
@@ -300,6 +324,10 @@ final class AudioRecorderService: AudioRecorderServiceProtocol {
         if let writeErrorDescription = ioSnapshot.writeErrorDescription, ioSnapshot.didWriteAudio == false {
             cleanup(recordedURL)
             throw AudioRecorderError.recordingWriteFailed(writeErrorDescription)
+        }
+        if let conversionErrorDescription = ioSnapshot.conversionErrorDescription, ioSnapshot.didWriteAudio == false {
+            cleanup(recordedURL)
+            throw AudioRecorderError.recordingWriteFailed("Live audio conversion failed: \(conversionErrorDescription)")
         }
 
         do {

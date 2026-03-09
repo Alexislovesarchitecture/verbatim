@@ -9,10 +9,14 @@ enum LocalTranscriptionError: LocalizedError {
     case missingAudioFile
     case invalidAudioFile(String)
     case unsupportedModel(LocalTranscriptionModel)
+    case missingSpeechUsageDescription(String)
     case speechPermissionDenied
     case speechPermissionRestricted
-    case recognizerUnavailable
-    case onDeviceRecognitionUnavailable
+    case unsupportedLocale(String)
+    case appleSpeechAssetsNotInstalled(String)
+    case appleSpeechAssetsInstalling(String)
+    case appleSpeechInstallFailed(String)
+    case appleSpeechRuntimeUnavailable(String)
     case recognitionFailed(Error)
     case noTranscriptionResult
     case whisperRuntimeUnavailable(String)
@@ -29,31 +33,49 @@ enum LocalTranscriptionError: LocalizedError {
             return message
         case .unsupportedModel(let model):
             return "\(model.title) is not available for the current local backend."
+        case .missingSpeechUsageDescription(let message):
+            return message
         case .speechPermissionDenied:
             return "Speech recognition permission is denied. Enable it in System Settings > Privacy & Security."
         case .speechPermissionRestricted:
             return "Speech recognition is restricted on this device."
-        case .recognizerUnavailable:
-            return "Speech recognizer is unavailable for the current locale."
-        case .onDeviceRecognitionUnavailable:
-            return "On-device transcription is unavailable on this device."
+        case .unsupportedLocale(let message),
+                .appleSpeechAssetsNotInstalled(let message),
+                .appleSpeechAssetsInstalling(let message),
+                .appleSpeechInstallFailed(let message),
+                .appleSpeechRuntimeUnavailable(let message),
+                .whisperRuntimeUnavailable(let message),
+                .whisperTranscriptionFailed(let message),
+                .unsupportedHardware(let message):
+            return message
         case .recognitionFailed(let error):
             return "Local transcription failed: \(error.localizedDescription)"
         case .noTranscriptionResult:
             return "No text was returned from local transcription."
-        case .whisperRuntimeUnavailable(let message):
-            return "Whisper runtime is unavailable: \(message)"
         case .whisperModelNotInstalled(let model):
             return "\(model.title) is not installed yet. Download the model in Settings."
         case .whisperModelNeedsInstall(let model):
             return "\(model.title) is downloaded but not installed yet. Install the model in Settings."
-        case .whisperTranscriptionFailed(let message):
-            return "Whisper transcription failed: \(message)"
-        case .unsupportedHardware(let message):
-            return message
         }
     }
 }
+
+struct AppleSpeechAuthorizationController: Sendable {
+    let currentStatus: @Sendable () -> SFSpeechRecognizerAuthorizationStatus
+    let requestStatus: @Sendable () async -> SFSpeechRecognizerAuthorizationStatus
+
+    static let live = AppleSpeechAuthorizationController(
+        currentStatus: { SFSpeechRecognizer.authorizationStatus() },
+        requestStatus: {
+            await withCheckedContinuation { continuation in
+                SFSpeechRecognizer.requestAuthorization { status in
+                    continuation.resume(returning: status)
+                }
+            }
+        }
+    )
+}
+
 final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @unchecked Sendable {
     let engineID = "apple-speech-ondevice"
     let capabilities = EngineCapabilities(
@@ -66,14 +88,31 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @
     )
 
     private let locale: Locale
+    private let runtimeManager: AppleSpeechRuntimeManaging
+    private let authorizationController: AppleSpeechAuthorizationController
+    private let missingUsageDescription: @Sendable (AppPrivacyUsageDescription) -> String?
 
-    init(locale: Locale = .current) {
+    init(
+        locale: Locale = .current,
+        runtimeManager: AppleSpeechRuntimeManaging = AppleSpeechRuntimeManager(),
+        authorizationController: AppleSpeechAuthorizationController = .live,
+        missingUsageDescription: @escaping @Sendable (AppPrivacyUsageDescription) -> String? = {
+            AppPrivacyUsageDescriptionValidator.missingUsageDescription($0)
+        }
+    ) {
         self.locale = locale
+        self.runtimeManager = runtimeManager
+        self.authorizationController = authorizationController
+        self.missingUsageDescription = missingUsageDescription
     }
 
     func transcribeBatch(audioURL: URL, options: TranscriptionOptions) async throws -> Transcript {
         let selectedModel = LocalTranscriptionModel(rawValue: options.modelID) ?? .appleOnDevice
         return try await transcribeLocally(audioFileURL: audioURL, model: selectedModel)
+    }
+
+    func runtimeStatus() async -> AppleSpeechRuntimeStatus {
+        await runtimeManager.status(for: locale)
     }
 
     func transcribeLocally(audioFileURL: URL, model: LocalTranscriptionModel) async throws -> Transcript {
@@ -85,8 +124,20 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @
             throw LocalTranscriptionError.unsupportedModel(model)
         }
 
-        let authorizationStatus = await requestSpeechAuthorization()
+        if let missingUsageDescription = missingUsageDescription(.speechRecognition) {
+            throw LocalTranscriptionError.missingSpeechUsageDescription(missingUsageDescription)
+        }
+
+        let authorizationStatus = authorizationController.currentStatus()
+        let resolvedAuthorizationStatus: SFSpeechRecognizerAuthorizationStatus
         switch authorizationStatus {
+        case .notDetermined:
+            resolvedAuthorizationStatus = await authorizationController.requestStatus()
+        default:
+            resolvedAuthorizationStatus = authorizationStatus
+        }
+
+        switch resolvedAuthorizationStatus {
         case .authorized:
             break
         case .denied:
@@ -99,26 +150,14 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @
             throw LocalTranscriptionError.speechPermissionDenied
         }
 
-        guard let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable else {
-            throw LocalTranscriptionError.recognizerUnavailable
-        }
-
-        guard recognizer.supportsOnDeviceRecognition else {
-            throw LocalTranscriptionError.onDeviceRecognitionUnavailable
-        }
-
-        let request = SFSpeechURLRecognitionRequest(url: audioFileURL)
-        request.requiresOnDeviceRecognition = true
-        request.shouldReportPartialResults = false
-
         do {
-            let result = try await recognize(request: request, recognizer: recognizer)
-            let transcriptText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !transcriptText.isEmpty else {
+            let snapshot = try await runtimeManager.transcribe(audioFileURL: audioFileURL, preferredLocale: locale)
+            let transcriptText = snapshot.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard transcriptText.isEmpty == false else {
                 throw LocalTranscriptionError.noTranscriptionResult
             }
 
-            let segments = result.segments.map { segment in
+            let segments = snapshot.segments.map { segment in
                 TranscriptSegment(
                     start: segment.start,
                     end: segment.end,
@@ -135,97 +174,31 @@ final class AppleLocalTranscriptionService: LocalTranscriptionServiceProtocol, @
                 modelID: model.rawValue,
                 responseFormat: "text"
             )
+        } catch let error as LocalTranscriptionError {
+            throw error
+        } catch let error as AppleSpeechRuntimeError {
+            throw mapRuntimeError(error)
         } catch {
-            if let localError = error as? LocalTranscriptionError {
-                throw localError
-            }
             throw LocalTranscriptionError.recognitionFailed(error)
         }
     }
 
-    private struct RecognitionSnapshot: Sendable {
-        struct Segment: Sendable {
-            let start: TimeInterval
-            let end: TimeInterval
-            let text: String
-        }
-
-        let text: String
-        let segments: [Segment]
-    }
-
-    private func recognize(request: SFSpeechURLRecognitionRequest, recognizer: SFSpeechRecognizer) async throws -> RecognitionSnapshot {
-        final class RecognitionState {
-            private let lock = NSLock()
-            private var didFinish = false
-            private var task: SFSpeechRecognitionTask?
-
-            func setTask(_ task: SFSpeechRecognitionTask) {
-                lock.lock()
-                self.task = task
-                lock.unlock()
-            }
-
-            func finishIfNeeded() -> Bool {
-                lock.lock()
-                defer { lock.unlock() }
-                if didFinish { return false }
-                didFinish = true
-                return true
-            }
-
-            func cancelTask() {
-                lock.lock()
-                let activeTask = task
-                task = nil
-                lock.unlock()
-                activeTask?.cancel()
-            }
-        }
-
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<RecognitionSnapshot, Error>) in
-            let state = RecognitionState()
-
-            let recognitionTask = recognizer.recognitionTask(with: request) { result, error in
-                if let error {
-                    guard state.finishIfNeeded() else { return }
-                    state.cancelTask()
-                    continuation.resume(throwing: LocalTranscriptionError.recognitionFailed(error))
-                    return
-                }
-
-                guard let result else {
-                    return
-                }
-
-                if result.isFinal {
-                    guard state.finishIfNeeded() else { return }
-                    state.cancelTask()
-
-                    let transcription = result.bestTranscription
-                    let snapshot = RecognitionSnapshot(
-                        text: transcription.formattedString,
-                        segments: transcription.segments.map { segment in
-                            RecognitionSnapshot.Segment(
-                                start: segment.timestamp,
-                                end: segment.timestamp + segment.duration,
-                                text: segment.substring
-                            )
-                        }
-                    )
-                    continuation.resume(returning: snapshot)
-                }
-            }
-
-            state.setTask(recognitionTask)
-        }
-    }
-
-    private func requestSpeechAuthorization() async -> SFSpeechRecognizerAuthorizationStatus {
-        await withCheckedContinuation { continuation in
-            SFSpeechRecognizer.requestAuthorization { status in
-                continuation.resume(returning: status)
-            }
+    private func mapRuntimeError(_ error: AppleSpeechRuntimeError) -> LocalTranscriptionError {
+        switch error {
+        case .unsupportedLocale(let message):
+            return .unsupportedLocale(message)
+        case .assetsNotInstalled(let message):
+            return .appleSpeechAssetsNotInstalled(message)
+        case .assetsInstalling(let message):
+            return .appleSpeechAssetsInstalling(message)
+        case .installationFailed(let message):
+            return .appleSpeechInstallFailed(message)
+        case .runtimeUnavailable(let message):
+            return .appleSpeechRuntimeUnavailable(message)
+        case .analyzerFailed(let message):
+            return .recognitionFailed(NSError(domain: "AppleSpeechRuntime", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: message
+            ]))
         }
     }
 }

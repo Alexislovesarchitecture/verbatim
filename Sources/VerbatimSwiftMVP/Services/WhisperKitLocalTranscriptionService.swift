@@ -5,8 +5,12 @@ struct LocalTranscriptionRouteResolution: Equatable, Sendable {
     let configuredMode: LocalTranscriptionEngineMode
     let resolvedBackend: LocalTranscriptionBackend
     let selectedModel: LocalTranscriptionModel
+    let transport: LocalTranscriptionTransport?
     let serverConnectionMode: WhisperKitServerConnectionMode?
     let lifecycleState: String?
+    let helperState: ManagedWhisperKitHelperState?
+    let prewarmState: ManagedWhisperKitPrewarmState?
+    let failureStage: LocalTranscriptionFailureStage?
     let message: String?
     let usedLegacyFallback: Bool
 }
@@ -290,15 +294,7 @@ actor WhisperKitModelManager {
     }
 
     private static func makeRootDirectoryURL(fileManager: FileManager, baseDirectoryURL: URL?) -> URL {
-        if let baseDirectoryURL {
-            return baseDirectoryURL.appendingPathComponent("WhisperKit", isDirectory: true)
-        }
-
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        return appSupport
-            .appendingPathComponent("VerbatimSwiftMVP", isDirectory: true)
-            .appendingPathComponent("WhisperKit", isDirectory: true)
+        LocalRuntimePaths(fileManager: fileManager, baseDirectoryURL: baseDirectoryURL).whisperKitRoot
     }
 
     private static func defaultRuntimeStatus() -> WhisperRuntimeStatus {
@@ -337,13 +333,16 @@ final class WhisperKitLocalTranscriptionService: LocalTranscriptionServiceProtoc
 
     private let modelManager: WhisperKitModelManager
     private let routeTracker: LocalTranscriptionRouteTracker?
+    private let serverManager: WhisperKitServerManager
 
     init(
         modelManager: WhisperKitModelManager,
-        routeTracker: LocalTranscriptionRouteTracker? = nil
+        routeTracker: LocalTranscriptionRouteTracker? = nil,
+        serverManager: WhisperKitServerManager = WhisperKitServerManager()
     ) {
         self.modelManager = modelManager
         self.routeTracker = routeTracker
+        self.serverManager = serverManager
     }
 
     func transcribeBatch(audioURL: URL, options: TranscriptionOptions) async throws -> Transcript {
@@ -352,7 +351,15 @@ final class WhisperKitLocalTranscriptionService: LocalTranscriptionServiceProtoc
     }
 
     func transcribeLocally(audioFileURL: URL, model: LocalTranscriptionModel) async throws -> Transcript {
-        try await transcribe(audioFileURL: audioFileURL, model: model, options: TranscriptionOptions(modelID: model.rawValue, responseFormat: "text"))
+        try await transcribe(
+            audioFileURL: audioFileURL,
+            model: model,
+            options: TranscriptionOptions(
+                modelID: model.rawValue,
+                responseFormat: "text",
+                whisperKitServerConnectionMode: .managedHelper
+            )
+        )
     }
 
     private func transcribe(
@@ -373,17 +380,6 @@ final class WhisperKitLocalTranscriptionService: LocalTranscriptionServiceProtoc
         }
 
         let installState = await modelManager.installState(for: model)
-        await routeTracker?.record(
-            LocalTranscriptionRouteResolution(
-                configuredMode: options.localEngineMode ?? .whisperKit,
-                resolvedBackend: .whisperKitSDK,
-                selectedModel: model,
-                serverConnectionMode: nil,
-                lifecycleState: installState.lifecycleIdentifier,
-                message: nil,
-                usedLegacyFallback: false
-            )
-        )
         let modelDirectoryURL: URL
         switch installState {
         case .ready(let installedURL):
@@ -400,63 +396,160 @@ final class WhisperKitLocalTranscriptionService: LocalTranscriptionServiceProtoc
             throw LocalTranscriptionError.whisperRuntimeUnavailable(message)
         }
 
-        let config = WhisperKitConfig(
-            model: model.whisperKitModelName,
-            modelFolder: modelDirectoryURL.path,
-            verbose: false,
-            logLevel: .none,
-            prewarm: false,
-            load: true,
-            download: false,
-            useBackgroundDownloadSession: false
-        )
-        let decodeOptions = DecodingOptions(
-            verbose: false,
-            withoutTimestamps: false,
-            wordTimestamps: true
-        )
-
-        do {
-            let pipe = try await WhisperKit(config)
-            let results = try await pipe.transcribe(audioPath: audioFileURL.path, decodeOptions: decodeOptions)
-            let segments = results
-                .flatMap { $0.segments }
-                .map {
-                    TranscriptSegment(
-                        start: TimeInterval($0.start),
-                        end: TimeInterval($0.end),
-                        speaker: nil,
-                        text: $0.text
-                    )
+        let connectionMode = options.whisperKitServerConnectionMode ?? .managedHelper
+        switch connectionMode {
+        case .managedHelper:
+            do {
+                let runtimeMetadata = try await serverManager.ensureManagedRuntimeRunning()
+                await recordRoute(
+                    model: model,
+                    options: options,
+                    installState: installState.lifecycleIdentifier,
+                    transport: .managedHelper,
+                    serverConnectionMode: connectionMode,
+                    helperMetadata: runtimeMetadata,
+                    failureStage: nil,
+                    message: nil
+                )
+                let transcript = try await serverManager.transcribeManagedRuntime(
+                    audioFileURL: audioFileURL,
+                    model: model,
+                    modelDirectoryURL: modelDirectoryURL
+                )
+                let latestMetadata = await serverManager.managedRuntimeMetadata()
+                await recordRoute(
+                    model: model,
+                    options: options,
+                    installState: installState.lifecycleIdentifier,
+                    transport: .managedHelper,
+                    serverConnectionMode: connectionMode,
+                    helperMetadata: latestMetadata,
+                    failureStage: nil,
+                    message: nil
+                )
+                return transcript
+            } catch {
+                let latestMetadata = await serverManager.managedRuntimeMetadata()
+                await recordRoute(
+                    model: model,
+                    options: options,
+                    installState: installState.lifecycleIdentifier,
+                    transport: .managedHelper,
+                    serverConnectionMode: connectionMode,
+                    helperMetadata: latestMetadata,
+                    failureStage: failureStage(for: error),
+                    message: error.localizedDescription
+                )
+                throw mapManagedRuntimeError(error)
             }
-            let rawText = results
-                .map { $0.text }
-                .joined(separator: "\n")
-                .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
-
-            guard !rawText.isEmpty else {
-                throw LocalTranscriptionError.noTranscriptionResult
+        case .externalServer:
+            do {
+                let transcript = try await serverManager.transcribeExternal(
+                    audioFileURL: audioFileURL,
+                    model: model,
+                    externalBaseURL: options.whisperKitServerBaseURL
+                )
+                await recordRoute(
+                    model: model,
+                    options: options,
+                    installState: installState.lifecycleIdentifier,
+                    transport: .externalServer,
+                    serverConnectionMode: connectionMode,
+                    helperMetadata: nil,
+                    failureStage: nil,
+                    message: nil
+                )
+                return transcript
+            } catch {
+                await recordRoute(
+                    model: model,
+                    options: options,
+                    installState: installState.lifecycleIdentifier,
+                    transport: .externalServer,
+                    serverConnectionMode: connectionMode,
+                    helperMetadata: nil,
+                    failureStage: .inference,
+                    message: error.localizedDescription
+                )
+                throw LocalTranscriptionError.whisperTranscriptionFailed(error.localizedDescription)
             }
+        }
+    }
 
-            return Transcript(
-                rawText: rawText,
-                segments: segments,
-                tokenLogprobs: nil,
-                lowConfidenceSpans: [],
-                modelID: model.rawValue,
-                responseFormat: "text"
+    private func recordRoute(
+        model: LocalTranscriptionModel,
+        options: TranscriptionOptions,
+        installState: String?,
+        transport: LocalTranscriptionTransport,
+        serverConnectionMode: WhisperKitServerConnectionMode?,
+        helperMetadata: ManagedWhisperKitRuntimeMetadata?,
+        failureStage: LocalTranscriptionFailureStage?,
+        message: String?
+    ) async {
+        await routeTracker?.record(
+            LocalTranscriptionRouteResolution(
+                configuredMode: options.localEngineMode ?? .whisperKit,
+                resolvedBackend: .whisperKitSDK,
+                selectedModel: model,
+                transport: transport,
+                serverConnectionMode: serverConnectionMode,
+                lifecycleState: installState,
+                helperState: helperMetadata?.helperState,
+                prewarmState: helperMetadata?.prewarmState,
+                failureStage: failureStage,
+                message: message ?? helperMetadata?.lastFailureMessage,
+                usedLegacyFallback: false
             )
-        } catch {
-            throw LocalTranscriptionError.whisperTranscriptionFailed(error.localizedDescription)
+        )
+    }
+
+    private func failureStage(for error: Error) -> LocalTranscriptionFailureStage? {
+        if error is LocalTranscriptionError {
+            return .convert
+        }
+        guard let runtimeError = error as? ManagedWhisperKitRuntimeError else {
+            return nil
+        }
+        switch runtimeError {
+        case .executableUnavailable, .launchFailed:
+            return .launch
+        case .healthCheckFailed:
+            return .health
+        case .inferenceFailed:
+            return .inference
+        case .invalidResponse:
+            return .responseParse
+        }
+    }
+
+    private func mapManagedRuntimeError(_ error: Error) -> Error {
+        if let localError = error as? LocalTranscriptionError {
+            return localError
+        }
+
+        guard let runtimeError = error as? ManagedWhisperKitRuntimeError else {
+            return LocalTranscriptionError.whisperTranscriptionFailed(error.localizedDescription)
+        }
+
+        switch runtimeError {
+        case .executableUnavailable, .launchFailed, .healthCheckFailed:
+            return LocalTranscriptionError.whisperRuntimeUnavailable(runtimeError.localizedDescription)
+        case .inferenceFailed, .invalidResponse:
+            return LocalTranscriptionError.whisperTranscriptionFailed(runtimeError.localizedDescription)
         }
     }
 }
 
 final class WhisperKitServerManager: @unchecked Sendable {
     private let session: URLSession
+    private let managedRuntime: ManagedWhisperKitRuntimeProtocol
 
-    init(session: URLSession = .shared) {
+    init(
+        session: URLSession = .shared,
+        managedRuntime: ManagedWhisperKitRuntimeProtocol = ManagedWhisperKitRuntime()
+    ) {
         self.session = session
+        self.managedRuntime = managedRuntime
     }
 
     func status(
@@ -466,8 +559,12 @@ final class WhisperKitServerManager: @unchecked Sendable {
         switch connectionMode {
         case .managedHelper:
             do {
-                _ = try runManagedHelper(arguments: ["health"])
-                return WhisperKitServerStatus(isReachable: true, message: "Managed WhisperKit helper is available.", activeModel: nil)
+                let metadata = try await managedRuntime.ensureRunning()
+                return WhisperKitServerStatus(
+                    isReachable: metadata.helperState == .running,
+                    message: metadata.lastFailureMessage ?? "Managed WhisperKit helper is available.",
+                    activeModel: metadata.activeModel
+                )
             } catch {
                 return WhisperKitServerStatus(isReachable: false, message: error.localizedDescription, activeModel: nil)
             }
@@ -493,74 +590,90 @@ final class WhisperKitServerManager: @unchecked Sendable {
         }
     }
 
-    func transcribe(
+    func ensureManagedRuntimeRunning() async throws -> ManagedWhisperKitRuntimeMetadata {
+        try await managedRuntime.ensureRunning()
+    }
+
+    func managedRuntimeMetadata() async -> ManagedWhisperKitRuntimeMetadata {
+        await managedRuntime.latestMetadata()
+    }
+
+    func prewarmManagedRuntime(
+        model: LocalTranscriptionModel,
+        modelDirectoryURL: URL
+    ) async throws -> ManagedWhisperKitRuntimeMetadata {
+        try await managedRuntime.prewarm(model: model, modelDirectoryURL: modelDirectoryURL)
+    }
+
+    func transcribeManagedRuntime(
         audioFileURL: URL,
         model: LocalTranscriptionModel,
-        connectionMode: WhisperKitServerConnectionMode,
+        modelDirectoryURL: URL
+    ) async throws -> Transcript {
+        try await managedRuntime.transcribe(
+            audioFileURL: audioFileURL,
+            model: model,
+            modelDirectoryURL: modelDirectoryURL
+        )
+    }
+
+    func shutdownManagedRuntime() async {
+        await managedRuntime.shutdown()
+    }
+
+    func transcribeExternal(
+        audioFileURL: URL,
+        model: LocalTranscriptionModel,
         externalBaseURL: String?
     ) async throws -> Transcript {
-        switch connectionMode {
-        case .managedHelper:
-            let response = try runManagedHelper(arguments: [
-                "transcribe",
-                "--audio-path", audioFileURL.path,
-                "--model", model.whisperKitModelName ?? model.rawValue
-            ])
-            let payload = try JSONDecoder().decode(ManagedWhisperKitHelperResponse.self, from: response)
-            guard payload.success else {
-                throw LocalTranscriptionError.whisperTranscriptionFailed(payload.message ?? "Managed WhisperKit helper failed.")
-            }
-            return payload.transcript ?? Transcript.empty(modelID: model.rawValue, responseFormat: "text")
-        case .externalServer:
-            guard let baseURL = normalizedBaseURL(from: externalBaseURL) else {
-                throw LocalTranscriptionError.whisperTranscriptionFailed("WhisperKit server URL is missing.")
-            }
-            guard let url = URL(string: "\(baseURL)/v1/audio/transcriptions") else {
-                throw LocalTranscriptionError.whisperTranscriptionFailed("WhisperKit server URL is invalid.")
-            }
+        guard let baseURL = normalizedBaseURL(from: externalBaseURL) else {
+            throw LocalTranscriptionError.whisperTranscriptionFailed("WhisperKit server URL is missing.")
+        }
+        guard let url = URL(string: "\(baseURL)/v1/audio/transcriptions") else {
+            throw LocalTranscriptionError.whisperTranscriptionFailed("WhisperKit server URL is invalid.")
+        }
 
-            let boundary = "Boundary-\(UUID().uuidString)"
-            var request = URLRequest(url: url)
-            request.httpMethod = "POST"
-            request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try multipartBody(audioFileURL: audioFileURL, modelName: model.whisperKitModelName ?? model.rawValue, boundary: boundary)
+        let boundary = "Boundary-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try multipartBody(audioFileURL: audioFileURL, modelName: model.whisperKitModelName ?? model.rawValue, boundary: boundary)
 
-            let (data, response) = try await session.data(for: request)
-            let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<300).contains(statusCode) else {
-                let body = String(data: data, encoding: .utf8) ?? ""
-                throw LocalTranscriptionError.whisperTranscriptionFailed("WhisperKit server returned HTTP \(statusCode). \(body)")
-            }
+        let (data, response) = try await session.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw LocalTranscriptionError.whisperTranscriptionFailed("WhisperKit server returned HTTP \(statusCode). \(body)")
+        }
 
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let text = json["text"] as? String {
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !trimmed.isEmpty else {
-                    throw LocalTranscriptionError.noTranscriptionResult
-                }
-                return Transcript(
-                    rawText: trimmed,
-                    segments: [],
-                    tokenLogprobs: nil,
-                    lowConfidenceSpans: [],
-                    modelID: model.rawValue,
-                    responseFormat: "json"
-                )
-            }
-
-            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            guard !text.isEmpty else {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let text = json["text"] as? String {
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
                 throw LocalTranscriptionError.noTranscriptionResult
             }
             return Transcript(
-                rawText: text,
+                rawText: trimmed,
                 segments: [],
                 tokenLogprobs: nil,
                 lowConfidenceSpans: [],
                 modelID: model.rawValue,
-                responseFormat: "text"
+                responseFormat: "json"
             )
         }
+
+        let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            throw LocalTranscriptionError.noTranscriptionResult
+        }
+        return Transcript(
+            rawText: text,
+            segments: [],
+            tokenLogprobs: nil,
+            lowConfidenceSpans: [],
+            modelID: model.rawValue,
+            responseFormat: "text"
+        )
     }
 
     private func normalizedBaseURL(from input: String?) -> String? {
@@ -568,35 +681,6 @@ final class WhisperKitServerManager: @unchecked Sendable {
             return nil
         }
         return trimmed.hasSuffix("/") ? String(trimmed.dropLast()) : trimmed
-    }
-
-    private func runManagedHelper(arguments: [String]) throws -> Data {
-        guard let executableURL = Bundle.main.executableURL else {
-            throw LocalTranscriptionError.whisperTranscriptionFailed("Managed WhisperKit helper executable is unavailable.")
-        }
-
-        let process = Process()
-        process.executableURL = executableURL
-        process.arguments = ["--whisperkit-helper"] + arguments
-
-        let output = Pipe()
-        let error = Pipe()
-        process.standardOutput = output
-        process.standardError = error
-
-        try process.run()
-        process.waitUntilExit()
-
-        let stdoutData = output.fileHandleForReading.readDataToEndOfFile()
-        let stderrData = error.fileHandleForReading.readDataToEndOfFile()
-        guard process.terminationStatus == 0 else {
-            let stderrText = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            throw LocalTranscriptionError.whisperTranscriptionFailed(
-                stderrText.isEmpty ? "Managed WhisperKit helper failed to start." : stderrText
-            )
-        }
-
-        return stdoutData
     }
 
     private func multipartBody(audioFileURL: URL, modelName: String, boundary: String) throws -> Data {

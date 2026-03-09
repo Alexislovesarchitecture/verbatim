@@ -208,6 +208,8 @@ struct TranscriptionOptions: Equatable, Sendable {
     var knownSpeakerNames: [String]
     var knownSpeakerReferences: [String]
     var localEngineMode: LocalTranscriptionEngineMode?
+    var whisperKitServerConnectionMode: WhisperKitServerConnectionMode?
+    var whisperKitServerBaseURL: String?
 
     init(
         modelID: String,
@@ -222,7 +224,9 @@ struct TranscriptionOptions: Equatable, Sendable {
         chunkingStrategy: String? = nil,
         knownSpeakerNames: [String] = [],
         knownSpeakerReferences: [String] = [],
-        localEngineMode: LocalTranscriptionEngineMode? = nil
+        localEngineMode: LocalTranscriptionEngineMode? = nil,
+        whisperKitServerConnectionMode: WhisperKitServerConnectionMode? = nil,
+        whisperKitServerBaseURL: String? = nil
     ) {
         self.modelID = modelID
         self.apiKey = apiKey
@@ -237,6 +241,8 @@ struct TranscriptionOptions: Equatable, Sendable {
         self.knownSpeakerNames = knownSpeakerNames
         self.knownSpeakerReferences = knownSpeakerReferences
         self.localEngineMode = localEngineMode
+        self.whisperKitServerConnectionMode = whisperKitServerConnectionMode
+        self.whisperKitServerBaseURL = whisperKitServerBaseURL
     }
 }
 

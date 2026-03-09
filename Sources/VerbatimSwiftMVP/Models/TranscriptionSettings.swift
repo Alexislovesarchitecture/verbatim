@@ -125,6 +125,10 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    static var userFacingCases: [LocalTranscriptionModel] {
+        [.appleOnDevice]
+    }
+
     var isAppleModel: Bool {
         self == .appleOnDevice
     }
@@ -153,7 +157,7 @@ enum LocalTranscriptionModel: String, CaseIterable, Identifiable, Sendable {
     var detail: String {
         switch self {
         case .appleOnDevice:
-            return "Built-in Apple Speech framework"
+            return "Apple Dictation with system-managed on-device speech assets"
         case .whisperTiny:
             return "74 MB · Fastest, lowest accuracy"
         case .whisperBase:
@@ -227,7 +231,7 @@ enum LocalTranscriptionEngineMode: String, CaseIterable, Identifiable, Codable, 
     var id: String { rawValue }
 
     static var userFacingCases: [LocalTranscriptionEngineMode] {
-        [.appleSpeech, .whisperKit, .legacyWhisper]
+        [.appleSpeech]
     }
 
     static func persistedValue(_ rawValue: String, selectedModel: LocalTranscriptionModel?) -> LocalTranscriptionEngineMode? {

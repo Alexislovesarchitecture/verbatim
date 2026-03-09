@@ -443,15 +443,7 @@ actor WhisperModelManager {
     }
 
     private static func makeRootDirectoryURL(fileManager: FileManager, baseDirectoryURL: URL?) -> URL {
-        if let baseDirectoryURL {
-            return baseDirectoryURL.appendingPathComponent("Whisper", isDirectory: true)
-        }
-
-        let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support", isDirectory: true)
-        return appSupport
-            .appendingPathComponent("VerbatimSwiftMVP", isDirectory: true)
-            .appendingPathComponent("Whisper", isDirectory: true)
+        LocalRuntimePaths(fileManager: fileManager, baseDirectoryURL: baseDirectoryURL).legacyWhisperRoot
     }
 
     private static func defaultRuntimeStatus() -> WhisperRuntimeStatus {
@@ -706,12 +698,15 @@ final class ManagedLocalTranscriptionService: LocalTranscriptionServiceProtocol,
 
     func transcribeBatch(audioURL: URL, options: TranscriptionOptions) async throws -> Transcript {
         let model = LocalTranscriptionModel(rawValue: options.modelID) ?? .appleOnDevice
-        return try await transcribeLocally(audioFileURL: audioURL, model: model)
+        if model.isAppleModel {
+            return try await transcribeAppleLocally(audioFileURL: audioURL, model: model)
+        }
+        return try await transcribeWhisperLocally(audioFileURL: audioURL, model: model, options: options)
     }
 
     func transcribeLocally(audioFileURL: URL, model: LocalTranscriptionModel) async throws -> Transcript {
         if model.isAppleModel {
-            return try await appleService.transcribeLocally(audioFileURL: audioFileURL, model: model)
+            return try await transcribeAppleLocally(audioFileURL: audioFileURL, model: model)
         }
 
         return try await transcribeWhisperLocally(
@@ -720,7 +715,8 @@ final class ManagedLocalTranscriptionService: LocalTranscriptionServiceProtocol,
             options: TranscriptionOptions(
                 modelID: model.rawValue,
                 responseFormat: "text",
-                localEngineMode: .whisperKit
+                localEngineMode: .whisperKit,
+                whisperKitServerConnectionMode: .managedHelper
             )
         )
     }
@@ -738,18 +734,7 @@ final class ManagedLocalTranscriptionService: LocalTranscriptionServiceProtocol,
 
         switch configuredMode {
         case .appleSpeech:
-            await routeTracker.record(
-                LocalTranscriptionRouteResolution(
-                    configuredMode: configuredMode,
-                    resolvedBackend: .appleSpeech,
-                    selectedModel: .appleOnDevice,
-                    serverConnectionMode: nil,
-                    lifecycleState: nil,
-                    message: nil,
-                    usedLegacyFallback: false
-                )
-            )
-            return try await appleService.transcribeLocally(audioFileURL: audioFileURL, model: .appleOnDevice)
+            return try await transcribeAppleLocally(audioFileURL: audioFileURL, model: .appleOnDevice)
 
         case .whisperKit:
             return try await whisperKitService.transcribeBatch(audioURL: audioFileURL, options: options)
@@ -761,8 +746,12 @@ final class ManagedLocalTranscriptionService: LocalTranscriptionServiceProtocol,
                     configuredMode: configuredMode,
                     resolvedBackend: .whisperCpp,
                     selectedModel: model,
+                    transport: .inProcess,
                     serverConnectionMode: nil,
                     lifecycleState: legacyState.lifecycleIdentifier,
+                    helperState: nil,
+                    prewarmState: nil,
+                    failureStage: nil,
                     message: nil,
                     usedLegacyFallback: false
                 )
@@ -787,5 +776,28 @@ final class ManagedLocalTranscriptionService: LocalTranscriptionServiceProtocol,
                 throw LocalTranscriptionError.whisperTranscriptionFailed("\(model.title) is still installing.")
             }
         }
+    }
+
+    private func transcribeAppleLocally(
+        audioFileURL: URL,
+        model: LocalTranscriptionModel
+    ) async throws -> Transcript {
+        let runtimeStatus = await appleService.runtimeStatus()
+        await routeTracker.record(
+            LocalTranscriptionRouteResolution(
+                configuredMode: .appleSpeech,
+                resolvedBackend: .appleSpeech,
+                selectedModel: model,
+                transport: .inProcess,
+                serverConnectionMode: nil,
+                lifecycleState: runtimeStatus.lifecycleIdentifier,
+                helperState: nil,
+                prewarmState: nil,
+                failureStage: nil,
+                message: runtimeStatus.message,
+                usedLegacyFallback: false
+            )
+        )
+        return try await appleService.transcribeLocally(audioFileURL: audioFileURL, model: model)
     }
 }

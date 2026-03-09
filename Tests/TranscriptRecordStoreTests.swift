@@ -137,7 +137,7 @@ final class TranscriptRecordStoreTests: XCTestCase {
         defer { sqlite3_close(db) }
 
         XCTAssertEqual(stringPragma("journal_mode", db: db), "wal")
-        XCTAssertEqual(intPragma("user_version", db: db), 6)
+        XCTAssertEqual(intPragma("user_version", db: db), 7)
     }
 
     func testLegacyTranscriptTableMigratesIntoTranscriptions() {
@@ -251,9 +251,13 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 transcriptionEngine: "remote",
                 localEngineMode: "whisper_auto",
                 resolvedBackend: "whisperkit_sdk",
+                transport: "managed_helper",
                 serverConnectionMode: nil,
                 modelID: "gpt-4o-mini-transcribe",
                 localModelLifecycleState: "ready",
+                helperState: "running",
+                prewarmState: "ready",
+                failureStage: "inference",
                 logicModelID: "gpt-5-mini",
                 reasoningEffort: "medium",
                 formattingProfile: "cleanup",
@@ -283,9 +287,13 @@ final class TranscriptRecordStoreTests: XCTestCase {
                 transcriptionEngine: "remote",
                 localEngineMode: "whisperkit_server",
                 resolvedBackend: "whisperkit_server",
+                transport: "external_server",
                 serverConnectionMode: "external_server",
                 modelID: "gpt-4o-mini-transcribe",
                 localModelLifecycleState: "downloading",
+                helperState: nil,
+                prewarmState: nil,
+                failureStage: nil,
                 logicModelID: "gpt-5-mini",
                 reasoningEffort: "medium",
                 formattingProfile: nil,
@@ -312,10 +320,15 @@ final class TranscriptRecordStoreTests: XCTestCase {
         XCTAssertEqual(sessions.count, 2)
         XCTAssertTrue(sessions.first?.skippedForSilence ?? false)
         XCTAssertEqual(sessions.first?.serverConnectionMode, "external_server")
+        XCTAssertEqual(sessions.first?.transport, "external_server")
         XCTAssertEqual(sessions.last?.logicModelID, "gpt-5-mini")
         XCTAssertEqual(sessions.last?.localEngineMode, "whisper_auto")
         XCTAssertEqual(sessions.last?.resolvedBackend, "whisperkit_sdk")
+        XCTAssertEqual(sessions.last?.transport, "managed_helper")
         XCTAssertEqual(sessions.last?.localModelLifecycleState, "ready")
+        XCTAssertEqual(sessions.last?.helperState, "running")
+        XCTAssertEqual(sessions.last?.prewarmState, "ready")
+        XCTAssertEqual(sessions.last?.failureStage, "inference")
         XCTAssertEqual(sessions.last?.reasoningEffort, "medium")
         XCTAssertEqual(sessions.last?.failureMessage, "sample failure")
         XCTAssertEqual(summary.averageTotalLatencyMs, 270)
