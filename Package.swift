@@ -2,47 +2,34 @@
 import PackageDescription
 
 let package = Package(
-  name: "VerbatimSwiftMVP",
+  name: "Verbatim",
   platforms: [
     .macOS("26.0"),
   ],
   products: [
-    .executable(name: "VerbatimSwiftMVP", targets: ["VerbatimSwiftMVP"]),
+    .executable(name: "Verbatim", targets: ["Verbatim"]),
   ],
-  dependencies: [
-    .package(url: "https://github.com/argmaxinc/WhisperKit.git", from: "0.9.4"),
-  ],
+  dependencies: [],
   targets: [
-    .binaryTarget(
-      name: "whisper",
-      path: "Vendor/whisper.xcframework"
-    ),
     .executableTarget(
-      name: "VerbatimSwiftMVP",
-      dependencies: [
-        "whisper",
-        .product(name: "WhisperKit", package: "WhisperKit"),
-      ],
-      path: "Sources",
+      name: "Verbatim",
+      dependencies: [],
+      path: "Verbatim",
       exclude: [
-        "VerbatimSwiftMVP/Services/AppleLocalTranscriptionService 2.swift",
-        "VerbatimSwiftMVP/Services/OllamaLocalLogicService 2.swift",
-        "VerbatimSwiftMVP/Services/OpenAITranscriptionService 2.swift",
-        "VerbatimSwiftMVP/ViewModels/TranscriptionViewModel 2.swift",
-        "VerbatimSwiftMVP/Views/ContentView 3.swift",
-        "VerbatimSwiftMVP/Views/ContentView 4.swift",
+        "Assets.xcassets",
       ],
       resources: [
-        .process("VerbatimSwiftMVP/Resources")
+        .process("Resources")
       ],
       linkerSettings: [
-        .linkedLibrary("sqlite3")
+        .linkedLibrary("sqlite3"),
+        .linkedFramework("Carbon"),
       ]
     ),
     .testTarget(
-      name: "VerbatimSwiftMVPTests",
-      dependencies: ["VerbatimSwiftMVP"],
-      path: "Tests"
+      name: "VerbatimTests",
+      dependencies: ["Verbatim"],
+      path: "NativeTests"
     ),
   ]
 )

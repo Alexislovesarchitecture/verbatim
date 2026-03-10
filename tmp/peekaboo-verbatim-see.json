@@ -1,0 +1,21 @@
+{
+  "success" : false,
+  "debug_logs" : [
+    "[2026-03-09T18:39:04.690Z] DEBUG: Runtime host: local (in-process)",
+    "[2026-03-09T18:39:04.690Z] VERBOSE [Operation]: Starting operation {app=VerbatimSwiftMVP Dev, operation=see_command, mode=auto, hasAnalyzePrompt=false, annotate=false, menubar=false}",
+    "[2026-03-09T18:39:04.690Z] VERBOSE [Performance]: Starting timer 'see_command'",
+    "[2026-03-09T18:39:04.690Z] VERBOSE [Permissions]: Checking screen recording permissions",
+    "[2026-03-09T18:39:04.701Z] VERBOSE [Permissions]: Screen recording permission granted",
+    "[2026-03-09T18:39:04.701Z] VERBOSE [Capture]: Starting capture and detection phase",
+    "[2026-03-09T18:39:04.701Z] VERBOSE [Capture]: Determined capture mode {mode=window}",
+    "[2026-03-09T18:39:04.701Z] VERBOSE [Operation]: Starting operation {operation=capture_phase, mode=window}",
+    "[2026-03-09T18:39:04.701Z] VERBOSE [Performance]: Starting timer 'capture_phase'",
+    "[2026-03-09T18:39:04.701Z] VERBOSE [Capture]: Initiating window capture {app=VerbatimSwiftMVP Dev, windowTitle=VerbatimSwiftMVP Dev}",
+    "[2026-03-09T18:39:04.712Z] VERBOSE [Operation]: Operation completed {success=false, error=Application 'VerbatimSwiftMVP Dev' not found, operation=see_command}",
+    "[2026-03-09T18:39:04.712Z] VERBOSE [Performance]: Timer 'see_command' completed {duration_ms=22}"
+  ],
+  "error" : {
+    "code" : "APP_NOT_FOUND",
+    "message" : "Application 'VerbatimSwiftMVP Dev' not found"
+  }
+}

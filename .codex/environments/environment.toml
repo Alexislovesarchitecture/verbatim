@@ -9,3 +9,8 @@ script = ""
 name = "run and kill previous"
 icon = "tool"
 command = "cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim && pkill -f '/VerbatimSwiftMVP$' || true && swift run VerbatimSwiftMVP"
+
+[[actions]]
+name = "run-dev"
+icon = "debug"
+command = "cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim && ./scripts/install_dev_app.sh --reset-permissions"

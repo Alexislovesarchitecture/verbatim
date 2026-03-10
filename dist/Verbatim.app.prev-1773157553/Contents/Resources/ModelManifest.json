@@ -1,0 +1,89 @@
+{
+  "models": [
+    {
+      "id": "tiny",
+      "provider": "whisper",
+      "name": "Tiny",
+      "detail": "Fastest, lower quality",
+      "sizeLabel": "75 MB",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
+      "expectedSizeBytes": 78000000,
+      "fileName": "ggml-tiny.bin",
+      "supportedLanguageIDs": [],
+      "recommended": false
+    },
+    {
+      "id": "base",
+      "provider": "whisper",
+      "name": "Base",
+      "detail": "Good balance",
+      "sizeLabel": "142 MB",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+      "expectedSizeBytes": 148000000,
+      "fileName": "ggml-base.bin",
+      "supportedLanguageIDs": [],
+      "recommended": true
+    },
+    {
+      "id": "small",
+      "provider": "whisper",
+      "name": "Small",
+      "detail": "Better quality, slower",
+      "sizeLabel": "466 MB",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+      "expectedSizeBytes": 488000000,
+      "fileName": "ggml-small.bin",
+      "supportedLanguageIDs": [],
+      "recommended": false
+    },
+    {
+      "id": "medium",
+      "provider": "whisper",
+      "name": "Medium",
+      "detail": "High quality",
+      "sizeLabel": "1.5 GB",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin",
+      "expectedSizeBytes": 1570000000,
+      "fileName": "ggml-medium.bin",
+      "supportedLanguageIDs": [],
+      "recommended": false
+    },
+    {
+      "id": "large",
+      "provider": "whisper",
+      "name": "Large",
+      "detail": "Best quality, slowest",
+      "sizeLabel": "3.0 GB",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin",
+      "expectedSizeBytes": 3140000000,
+      "fileName": "ggml-large-v3.bin",
+      "supportedLanguageIDs": [],
+      "recommended": false
+    },
+    {
+      "id": "turbo",
+      "provider": "whisper",
+      "name": "Turbo",
+      "detail": "Fast with good quality",
+      "sizeLabel": "1.6 GB",
+      "downloadURL": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+      "expectedSizeBytes": 1670000000,
+      "fileName": "ggml-large-v3-turbo.bin",
+      "supportedLanguageIDs": [],
+      "recommended": false
+    },
+    {
+      "id": "parakeet-tdt-0.6b-v3",
+      "provider": "parakeet",
+      "name": "Parakeet TDT 0.6B",
+      "detail": "Fast multilingual ASR with auto language detection",
+      "sizeLabel": "680 MB",
+      "downloadURL": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8.tar.bz2",
+      "extractDirectory": "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
+      "supportedLanguageIDs": [
+        "bg","hr","cs","da","nl","en","et","fi","fr","de","el","hu","it","lv","lt","mt","pl","pt","ro","sk","sl","es","sv","ru","uk"
+      ],
+      "recommended": true
+    }
+  ]
+}

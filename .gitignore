@@ -4,6 +4,9 @@
 *.build/
 DerivedData/
 build/
+*.xcuserstate
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
 
 # SwiftPM artifacts and metadata (local machine)
 .build
@@ -11,3 +14,5 @@ build/
 
 # macOS
 .DS_Store
+tmp/DerivedData-*/
+tmp/*-dev.app/
