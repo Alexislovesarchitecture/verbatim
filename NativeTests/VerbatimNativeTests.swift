@@ -2,6 +2,19 @@ import XCTest
 import Carbon
 @testable import Verbatim
 
+@MainActor
+private final class StubActiveAppContextService: ActiveAppContextServiceProtocol {
+    var context: ActiveAppContext
+
+    init(context: ActiveAppContext) {
+        self.context = context
+    }
+
+    func currentContext() -> ActiveAppContext {
+        context
+    }
+}
+
 final class VerbatimNativeTests: XCTestCase {
     func testSettingsStorePersistsSelection() {
         let suiteName = "verbatim-tests-\(UUID().uuidString)"
@@ -54,7 +67,141 @@ final class VerbatimNativeTests: XCTestCase {
         XCTAssertEqual(settings.pasteMode, .clipboardOnly)
         XCTAssertEqual(settings.hotkey.keyCode, 49)
         XCTAssertEqual(settings.hotkey.modifiers, UInt32(optionKey))
+        XCTAssertEqual(settings.dictationTrigger.bindings.macos.keyCode, 49)
+        XCTAssertEqual(settings.dictationTrigger.mode, .hold)
         XCTAssertNotNil(defaults.data(forKey: "Verbatim.NativeSettings"))
+    }
+
+    func testDictationTriggerBindingsPersistPerPlatform() {
+        let suiteName = "verbatim-trigger-bindings-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+        let store = SettingsStore(defaults: defaults)
+
+        var settings = store.settings
+        settings.dictationTrigger.mode = .toggle
+        settings.dictationTrigger.bindings.macos = .defaultFunctionKey
+        settings.dictationTrigger.bindings.windows = .windowsDefault
+        settings.dictationTrigger.bindings.linux = .linuxDefault
+        store.replace(settings)
+
+        let reloaded = SettingsStore(defaults: defaults).settings
+        XCTAssertEqual(reloaded.dictationTrigger.mode, .toggle)
+        XCTAssertEqual(reloaded.dictationTrigger.bindings.macos, .defaultFunctionKey)
+        XCTAssertEqual(reloaded.dictationTrigger.bindings.windows, .windowsDefault)
+        XCTAssertEqual(reloaded.dictationTrigger.bindings.linux, .linuxDefault)
+        XCTAssertEqual(reloaded.hotkeyBinding, .defaultFunctionKey)
+    }
+
+    @MainActor
+    func testPasteServiceCapturesFocusedFieldMetadata() {
+        let context = ActiveAppContext(
+            appName: "Atlas",
+            bundleID: "com.openai.atlas",
+            processIdentifier: 42,
+            styleCategory: .other,
+            windowTitle: "Compose",
+            focusedElementRole: "AXTextField",
+            focusedElementSubrole: nil,
+            focusedElementTitle: "Subject",
+            focusedElementPlaceholder: "Write something",
+            focusedElementDescription: "Email subject",
+            focusedValueSnippet: "draft"
+        )
+        let service = PasteService(activeContextService: StubActiveAppContextService(context: context))
+
+        let target = service.captureTarget()
+
+        XCTAssertEqual(target?.appName, "Atlas")
+        XCTAssertEqual(target?.windowTitle, "Compose")
+        XCTAssertEqual(target?.focusedElementTitle, "Subject")
+        XCTAssertEqual(target?.focusedElementPlaceholder, "Write something")
+        XCTAssertEqual(target?.focusedValueSnippet, "draft")
+        XCTAssertEqual(target?.isEditableTextInput, true)
+        XCTAssertEqual(target?.isSecureTextInput, false)
+    }
+
+    @MainActor
+    func testPasteServicePastesWhenFocusedFieldStillMatches() {
+        let context = ActiveAppContext(
+            appName: "Atlas",
+            bundleID: "com.openai.atlas",
+            processIdentifier: 42,
+            styleCategory: .other,
+            windowTitle: "Compose",
+            focusedElementRole: "AXTextField",
+            focusedElementSubrole: nil,
+            focusedElementTitle: "Subject",
+            focusedElementPlaceholder: "Write something",
+            focusedElementDescription: "Email subject",
+            focusedValueSnippet: "draft"
+        )
+        let contextService = StubActiveAppContextService(context: context)
+        let service = PasteService(
+            activeContextService: contextService,
+            restoreHandler: { _ in true },
+            pasteEventHandler: { true }
+        )
+
+        let outcome = service.paste(
+            text: "Hello there",
+            to: service.captureTarget(),
+            pasteMode: .autoPaste,
+            accessibilityGranted: true
+        )
+
+        XCTAssertEqual(outcome.result, .pasted)
+        XCTAssertEqual(outcome.diagnostic.outcome, .pasted)
+        XCTAssertNil(outcome.diagnostic.fallbackReason)
+    }
+
+    @MainActor
+    func testPasteServiceFallsBackSilentlyWhenFocusedFieldChanged() {
+        let captured = ActiveAppContext(
+            appName: "Atlas",
+            bundleID: "com.openai.atlas",
+            processIdentifier: 42,
+            styleCategory: .other,
+            windowTitle: "Compose",
+            focusedElementRole: "AXTextField",
+            focusedElementSubrole: nil,
+            focusedElementTitle: "Subject",
+            focusedElementPlaceholder: "Write something",
+            focusedElementDescription: "Email subject",
+            focusedValueSnippet: "draft"
+        )
+        let current = ActiveAppContext(
+            appName: "Atlas",
+            bundleID: "com.openai.atlas",
+            processIdentifier: 42,
+            styleCategory: .other,
+            windowTitle: "Compose",
+            focusedElementRole: "AXTextField",
+            focusedElementSubrole: nil,
+            focusedElementTitle: "Different field",
+            focusedElementPlaceholder: "Different field",
+            focusedElementDescription: "Other input",
+            focusedValueSnippet: nil
+        )
+        let contextService = StubActiveAppContextService(context: captured)
+        let service = PasteService(
+            activeContextService: contextService,
+            restoreHandler: { _ in true },
+            pasteEventHandler: { true }
+        )
+        let target = service.captureTarget()
+        contextService.context = current
+
+        let outcome = service.paste(
+            text: "Hello there",
+            to: target,
+            pasteMode: .autoPaste,
+            accessibilityGranted: true
+        )
+
+        XCTAssertEqual(outcome.result, .copiedOnly("Copied to clipboard. The target field no longer matched."))
+        XCTAssertEqual(outcome.diagnostic.outcome, .copiedSilently)
+        XCTAssertEqual(outcome.diagnostic.fallbackReason, .fieldMismatch)
     }
 
     func testPathsMigrateLegacyApplicationSupportRoot() throws {
@@ -257,12 +404,18 @@ final class VerbatimNativeTests: XCTestCase {
     @MainActor
     func testCoordinatorUsesSelectedProviderAndClipboardFallback() async throws {
         let store = FakeSettingsStore()
-        store.replace(AppSettings(selectedProvider: .parakeet, preferredLanguageID: "en", selectedWhisperModelID: "base", selectedParakeetModelID: "parakeet-tdt-0.6b-v3"))
+        var settings = AppSettings()
+        settings.selectedProvider = .parakeet
+        settings.preferredLanguageID = "en"
+        settings.selectedWhisperModelID = "base"
+        settings.selectedParakeetModelID = "parakeet-tdt-0.6b-v3"
+        store.replace(settings)
         let history = FakeHistoryStore()
         let coordinator = TranscriptionCoordinator(
             recordingManager: FakeRecordingManager(),
             normalizer: FakeNormalizer(),
             pasteService: FakePasteService(),
+            sharedCoreBridge: SharedCoreBridge(forceFallback: true),
             historyStore: history,
             settingsStore: store,
             providers: [
@@ -270,16 +423,18 @@ final class VerbatimNativeTests: XCTestCase {
             ]
         )
 
-        try await coordinator.startRecording(provider: .parakeet)
+        try await coordinator.startRecording(provider: .parakeet, activeContext: nil, styleDecision: nil)
         let outcome = try await coordinator.stopRecordingAndTranscribe(
             provider: .parakeet,
-            language: .init(identifier: "en"),
+            language: LanguageSelection(identifier: "en"),
             dictionaryEntries: [],
             accessibilityGranted: false
         )
 
         XCTAssertEqual(outcome.result.provider, .parakeet)
         XCTAssertEqual(outcome.pasteResult, .copiedOnly("Copied to clipboard. Enable Accessibility for auto-paste."))
+        XCTAssertEqual(outcome.pasteDiagnostic.outcome, .copiedSilently)
+        XCTAssertEqual(outcome.pasteDiagnostic.fallbackReason, .accessibilityUnavailable)
         XCTAssertEqual(history.savedItems.first?.provider, .parakeet)
     }
 
@@ -367,13 +522,55 @@ private struct FakeNormalizer: AudioNormalizationServiceProtocol {
 }
 
 private final class FakePasteService: PasteServiceProtocol, @unchecked Sendable {
-    func captureTarget() -> PasteTarget? { PasteTarget(appName: "Notes", bundleIdentifier: "com.apple.Notes", processIdentifier: 99) }
+    func captureTarget() -> PasteTarget? {
+        PasteTarget(
+            appName: "Notes",
+            bundleIdentifier: "com.apple.Notes",
+            processIdentifier: 99,
+            windowTitle: "Quick note",
+            focusedElementRole: "AXTextArea",
+            focusedElementSubrole: nil,
+            focusedElementTitle: "Body",
+            focusedElementPlaceholder: nil,
+            focusedElementDescription: nil,
+            focusedValueSnippet: nil,
+            isEditableTextInput: true,
+            isSecureTextInput: false
+        )
+    }
 
-    func paste(text: String, to target: PasteTarget?, pasteMode: PasteMode, accessibilityGranted: Bool) -> PasteResult {
+    func paste(text: String, to target: PasteTarget?, pasteMode: PasteMode, accessibilityGranted: Bool) -> PasteOperationResult {
         _ = text
         _ = target
         _ = pasteMode
-        return accessibilityGranted ? .pasted : .copiedOnly("Copied to clipboard. Enable Accessibility for auto-paste.")
+        if accessibilityGranted {
+            return PasteOperationResult(
+                result: .pasted,
+                diagnostic: PasteInsertionDiagnostic(
+                    requestedMode: pasteMode,
+                    targetAppName: target?.appName,
+                    targetWindowTitle: target?.windowTitle,
+                    targetFieldRole: target?.focusedElementRole,
+                    targetFieldTitle: target?.focusedElementTitle,
+                    targetFieldPlaceholder: target?.focusedElementPlaceholder,
+                    outcome: .pasted,
+                    fallbackReason: nil
+                )
+            )
+        }
+        return PasteOperationResult(
+            result: .copiedOnly("Copied to clipboard. Enable Accessibility for auto-paste."),
+            diagnostic: PasteInsertionDiagnostic(
+                requestedMode: pasteMode,
+                targetAppName: target?.appName,
+                targetWindowTitle: target?.windowTitle,
+                targetFieldRole: target?.focusedElementRole,
+                targetFieldTitle: target?.focusedElementTitle,
+                targetFieldPlaceholder: target?.focusedElementPlaceholder,
+                outcome: .copiedSilently,
+                fallbackReason: .accessibilityUnavailable
+            )
+        )
     }
 }
 

@@ -16,3 +16,5 @@ build/
 .DS_Store
 tmp/DerivedData-*/
 tmp/*-dev.app/
+RustCore/target/
+Verbatim/RustRuntime/libverbatim_core.dylib

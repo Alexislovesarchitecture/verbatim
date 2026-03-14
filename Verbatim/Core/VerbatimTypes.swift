@@ -3,6 +3,7 @@ import Carbon
 
 enum AppTab: String, CaseIterable, Identifiable, Codable, Sendable {
     case home
+    case style
     case dictionary
 
     var id: String { rawValue }
@@ -10,6 +11,7 @@ enum AppTab: String, CaseIterable, Identifiable, Codable, Sendable {
     var title: String {
         switch self {
         case .home: return "Home"
+        case .style: return "Style"
         case .dictionary: return "Dictionary"
         }
     }
@@ -17,7 +19,242 @@ enum AppTab: String, CaseIterable, Identifiable, Codable, Sendable {
     var systemImage: String {
         switch self {
         case .home: return "house"
+        case .style: return "textformat.alt"
         case .dictionary: return "book.closed"
+        }
+    }
+}
+
+enum StyleCategory: String, CaseIterable, Identifiable, Codable, Sendable {
+    case personalMessages = "personal_messages"
+    case workMessages = "work_messages"
+    case email
+    case other
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .personalMessages:
+            return "Personal messages"
+        case .workMessages:
+            return "Work messages"
+        case .email:
+            return "Email"
+        case .other:
+            return "Other"
+        }
+    }
+
+    var shortTitle: String {
+        switch self {
+        case .personalMessages:
+            return "Personal"
+        case .workMessages:
+            return "Work"
+        case .email:
+            return "Email"
+        case .other:
+            return "Other"
+        }
+    }
+
+    var heroTitle: String {
+        switch self {
+        case .personalMessages:
+            return "Saved defaults for personal chats"
+        case .workMessages:
+            return "Saved defaults for workplace messaging"
+        case .email:
+            return "Saved defaults for email writing"
+        case .other:
+            return "Saved defaults for everything else"
+        }
+    }
+
+    var heroSubtitle: String {
+        switch self {
+        case .personalMessages:
+            return "Use looser punctuation and lighter formatting for friendly conversation."
+        case .workMessages:
+            return "Keep quick work replies clear without over-formatting them."
+        case .email:
+            return "Bias toward stricter capitalization and sentence punctuation."
+        case .other:
+            return "Fallback defaults for notes, forms, browsers, and everything unclassified."
+        }
+    }
+
+    var sampleApps: [String] {
+        switch self {
+        case .personalMessages:
+            return ["Messages", "WhatsApp", "Telegram", "Discord"]
+        case .workMessages:
+            return ["Slack", "Teams", "Discord", "Google Chat"]
+        case .email:
+            return ["Mail", "Outlook", "Gmail", "HEY"]
+        case .other:
+            return ["Notes", "Todoist", "Safari", "Atlas"]
+        }
+    }
+
+    var supportedPresets: [StylePreset] {
+        switch self {
+        case .personalMessages:
+            return [.formal, .casual, .veryCasual]
+        case .workMessages, .email, .other:
+            return [.formal, .casual, .enthusiastic]
+        }
+    }
+}
+
+enum StylePreset: String, CaseIterable, Identifiable, Codable, Sendable {
+    case formal
+    case casual
+    case enthusiastic
+    case veryCasual = "very_casual"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .formal:
+            return "Formal"
+        case .casual:
+            return "Casual"
+        case .enthusiastic:
+            return "Enthusiastic"
+        case .veryCasual:
+            return "Very Casual"
+        }
+    }
+
+    var summary: String {
+        switch self {
+        case .formal:
+            return "Caps + punctuation"
+        case .casual:
+            return "Caps + lighter punctuation"
+        case .enthusiastic:
+            return "Clean punctuation + extra energy"
+        case .veryCasual:
+            return "Minimal punctuation"
+        }
+    }
+
+    func preview(for category: StyleCategory) -> String {
+        switch (category, self) {
+        case (.email, .formal):
+            return "Hi Alex,\n\nIt was great talking with you today. Looking forward to our next chat.\n\nBest,\nMary"
+        case (.email, .casual):
+            return "Hi Alex,\n\nIt was great talking with you today. Looking forward to our next chat.\n\nBest,\nMary"
+        case (.email, .enthusiastic):
+            return "Hi Alex,\n\nIt was great talking with you today. Looking forward to our next chat!\n\nBest,\nMary"
+        case (.workMessages, .formal):
+            return "Hey, if you're free, let's chat about the results."
+        case (.workMessages, .casual):
+            return "Hey, if you're free let's chat about the results"
+        case (.workMessages, .enthusiastic):
+            return "Hey, if you're free, let's chat about the results!"
+        case (.personalMessages, .formal):
+            return "Hey, are you free for lunch tomorrow? Let's do 12 if that works for you."
+        case (.personalMessages, .casual):
+            return "Hey are you free for lunch tomorrow? Let's do 12 if that works for you"
+        case (.personalMessages, .veryCasual):
+            return "hey are you free for lunch tomorrow? let's do 12 if that works for you"
+        case (.other, .formal):
+            return "So far, I am enjoying the new workout routine."
+        case (.other, .casual):
+            return "So far I am enjoying the new workout routine."
+        case (.other, .enthusiastic):
+            return "So far, I am enjoying the new workout routine!"
+        default:
+            return "Saved formatting defaults for this category."
+        }
+    }
+}
+
+struct StyleCategorySettings: Codable, Equatable, Sendable {
+    var enabled: Bool = false
+    var preset: StylePreset
+
+    init(enabled: Bool = false, preset: StylePreset) {
+        self.enabled = enabled
+        self.preset = preset
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case enabled
+        case preset
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? false
+        preset = try container.decodeIfPresent(StylePreset.self, forKey: .preset) ?? .casual
+    }
+}
+
+struct StyleSettings: Codable, Equatable, Sendable {
+    var personalMessages = StyleCategorySettings(preset: .casual)
+    var workMessages = StyleCategorySettings(preset: .formal)
+    var email = StyleCategorySettings(preset: .formal)
+    var other = StyleCategorySettings(preset: .casual)
+
+    init() {}
+
+    enum CodingKeys: String, CodingKey {
+        case personalMessages
+        case workMessages
+        case email
+        case other
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        personalMessages = try container.decodeIfPresent(StyleCategorySettings.self, forKey: .personalMessages) ?? StyleCategorySettings(preset: .casual)
+        workMessages = try container.decodeIfPresent(StyleCategorySettings.self, forKey: .workMessages) ?? StyleCategorySettings(preset: .formal)
+        email = try container.decodeIfPresent(StyleCategorySettings.self, forKey: .email) ?? StyleCategorySettings(preset: .formal)
+        other = try container.decodeIfPresent(StyleCategorySettings.self, forKey: .other) ?? StyleCategorySettings(preset: .casual)
+    }
+
+    func configuration(for category: StyleCategory) -> StyleCategorySettings {
+        switch category {
+        case .personalMessages:
+            return personalMessages
+        case .workMessages:
+            return workMessages
+        case .email:
+            return email
+        case .other:
+            return other
+        }
+    }
+
+    mutating func setPreset(_ preset: StylePreset, for category: StyleCategory) {
+        let resolvedPreset = category.supportedPresets.contains(preset) ? preset : (category.supportedPresets.first ?? preset)
+        switch category {
+        case .personalMessages:
+            personalMessages.preset = resolvedPreset
+        case .workMessages:
+            workMessages.preset = resolvedPreset
+        case .email:
+            email.preset = resolvedPreset
+        case .other:
+            other.preset = resolvedPreset
+        }
+    }
+
+    mutating func setEnabled(_ enabled: Bool, for category: StyleCategory) {
+        switch category {
+        case .personalMessages:
+            personalMessages.enabled = enabled
+        case .workMessages:
+            workMessages.enabled = enabled
+        case .email:
+            email.enabled = enabled
+        case .other:
+            other.enabled = enabled
         }
     }
 }
@@ -105,6 +342,342 @@ struct KeyboardShortcut: Codable, Equatable, Sendable {
     var isEmpty: Bool {
         modifiers == 0 && keyCode == 0
     }
+}
+
+struct ActiveAppContext: Equatable, Codable, Sendable {
+    let appName: String
+    let bundleID: String
+    let processIdentifier: Int32?
+    let styleCategory: StyleCategory
+    let windowTitle: String?
+    let focusedElementRole: String?
+    let focusedElementSubrole: String?
+    let focusedElementTitle: String?
+    let focusedElementPlaceholder: String?
+    let focusedElementDescription: String?
+    let focusedValueSnippet: String?
+
+    var summary: String {
+        if let windowTitle, windowTitle.isEmpty == false {
+            return "\(appName) • \(windowTitle)"
+        }
+        return appName
+    }
+
+    var isEditableTextInput: Bool {
+        editableRoleClass != nil
+    }
+
+    var isSecureTextInput: Bool {
+        let combined = [focusedElementRole, focusedElementSubrole, focusedElementDescription]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .joined(separator: " ")
+        return combined.contains("secure") || combined.contains("password")
+    }
+
+    var editableRoleClass: String? {
+        let combined = [focusedElementRole, focusedElementSubrole]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .joined(separator: " ")
+        if combined.contains("axtextarea") { return "text_area" }
+        if combined.contains("axsearchfield") { return "search_field" }
+        if combined.contains("axtextfield") || combined.contains("axtextinput") { return "text_field" }
+        if combined.contains("axcombobox") { return "combo_box" }
+        if combined.contains("axwebarea") { return "web_area" }
+        return nil
+    }
+}
+
+enum StyleDecisionSource: String, Codable, Sendable {
+    case focusedField = "focused_field"
+    case windowTitle = "window_title"
+    case bundleID = "bundle_id"
+    case fallback
+
+    var title: String {
+        switch self {
+        case .focusedField:
+            return "Focused field"
+        case .windowTitle:
+            return "Window title"
+        case .bundleID:
+            return "App identity"
+        case .fallback:
+            return "Fallback"
+        }
+    }
+}
+
+struct StyleDecisionReport: Equatable, Codable, Sendable {
+    var timestamp: Date
+    var category: StyleCategory
+    var preset: StylePreset
+    var source: StyleDecisionSource
+    var confidence: Double
+    var formattingEnabled: Bool
+    var reason: String?
+    var outputPreview: String?
+}
+
+enum TriggerMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case hold = "hold"
+    case toggle = "toggle"
+    case doubleTapLock = "double_tap_lock"
+
+    var id: String { rawValue }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let rawValue = try container.decode(String.self)
+        switch rawValue {
+        case "hold_to_talk", "hold":
+            self = .hold
+        case "tap_to_toggle", "toggle":
+            self = .toggle
+        case "double_tap_lock":
+            self = .doubleTapLock
+        default:
+            self = .hold
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .hold:
+            return "Hold to Talk"
+        case .toggle:
+            return "Tap to Toggle"
+        case .doubleTapLock:
+            return "Double Tap to Lock"
+        }
+    }
+}
+
+typealias HotkeyTriggerMode = TriggerMode
+
+enum TriggerID: String, Codable, Identifiable, Sendable {
+    case dictation
+
+    var id: String { rawValue }
+}
+
+enum InputEvent: String, Codable, Sendable {
+    case triggerDown = "trigger_down"
+    case triggerUp = "trigger_up"
+    case triggerToggle = "trigger_toggle"
+}
+
+enum DictationAction: String, Codable, Sendable {
+    case none
+    case startRecording = "start_recording"
+    case stopRecording = "stop_recording"
+    case cancelRecording = "cancel_recording"
+}
+
+struct TriggerStateSummary: Equatable, Codable, Sendable {
+    var statusMessage: String
+    var effectiveTriggerLabel: String
+    var backendLabel: String
+    var fallbackReason: String?
+    var isAvailable: Bool
+}
+
+enum FunctionKeyFallbackMode: String, CaseIterable, Identifiable, Codable, Sendable {
+    case automatic
+    case ask
+    case disabled
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .automatic:
+            return "Automatic"
+        case .ask:
+            return "Ask"
+        case .disabled:
+            return "Disabled"
+        }
+    }
+}
+
+struct HotkeyValidationResult: Equatable, Codable, Sendable {
+    var isValid: Bool
+    var blockingMessage: String?
+    var warningMessage: String?
+}
+
+struct HotkeyBinding: Codable, Hashable, Sendable {
+    static let commandModifierRawValue: UInt = 1 << 20
+    static let optionModifierRawValue: UInt = 1 << 19
+    static let controlModifierRawValue: UInt = 1 << 18
+    static let shiftModifierRawValue: UInt = 1 << 17
+    static let superModifierRawValue: UInt = 1 << 24
+    static let functionModifierRawValue: UInt = 1 << 23
+    static let relevantModifierMask: UInt = commandModifierRawValue
+        | optionModifierRawValue
+        | controlModifierRawValue
+        | shiftModifierRawValue
+        | superModifierRawValue
+        | functionModifierRawValue
+    static let functionKeyCode: UInt16 = 63
+    static let spaceKeyCode: UInt16 = 49
+
+    var keyCode: UInt16
+    var modifierFlagsRawValue: UInt
+    var keyDisplay: String
+    var modifierKeyRawValue: UInt?
+
+    var displayTitle: String {
+        let parts = Self.modifierNames(from: modifierFlagsRawValue) + [keyDisplay]
+        return parts.joined(separator: modifierKeyRawValue == nil ? " + " : "")
+    }
+
+    var usesFn: Bool {
+        modifierKeyRawValue == Self.functionModifierRawValue
+            || (modifierFlagsRawValue & Self.functionModifierRawValue != 0)
+    }
+
+    var isModifierOnly: Bool {
+        modifierKeyRawValue != nil
+    }
+
+    var isFunctionOnlyBinding: Bool {
+        keyCode == Self.functionKeyCode
+            && modifierKeyRawValue == Self.functionModifierRawValue
+            && modifierFlagsRawValue == 0
+    }
+
+    var validationResult: HotkeyValidationResult {
+        if isModifierOnly && modifierKeyRawValue != Self.functionModifierRawValue {
+            return HotkeyValidationResult(isValid: false, blockingMessage: "Only Fn / Globe can be used alone.", warningMessage: nil)
+        }
+        if isModifierOnly {
+            return HotkeyValidationResult(isValid: true, blockingMessage: nil, warningMessage: "Fn / Globe support depends on Accessibility access and your keyboard.")
+        }
+        if modifierFlagsRawValue == 0 {
+            return HotkeyValidationResult(isValid: false, blockingMessage: "Choose a shortcut with at least one modifier.", warningMessage: nil)
+        }
+        return HotkeyValidationResult(isValid: true, blockingMessage: nil, warningMessage: nil)
+    }
+
+    static var defaultFunctionKey: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: functionKeyCode,
+            modifierFlagsRawValue: 0,
+            keyDisplay: "Fn",
+            modifierKeyRawValue: functionModifierRawValue
+        )
+    }
+
+    static var optionSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: optionModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var controlSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: controlModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var controlOptionSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: controlModifierRawValue | optionModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var commandShiftSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: commandModifierRawValue | shiftModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var controlShiftSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: controlModifierRawValue | shiftModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var controlSuperSpace: HotkeyBinding {
+        HotkeyBinding(
+            keyCode: spaceKeyCode,
+            modifierFlagsRawValue: controlModifierRawValue | superModifierRawValue,
+            keyDisplay: "Space",
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static var recommendedFallbacks: [HotkeyBinding] {
+        [.optionSpace, .controlSpace, .controlOptionSpace, .commandShiftSpace]
+    }
+
+    static var windowsDefault: HotkeyBinding { .controlShiftSpace }
+
+    static var linuxDefault: HotkeyBinding { .controlSuperSpace }
+
+    static func fromLegacyShortcut(_ shortcut: KeyboardShortcut) -> HotkeyBinding {
+        var modifierFlagsRawValue: UInt = 0
+        if shortcut.modifiers & UInt32(cmdKey) != 0 { modifierFlagsRawValue |= commandModifierRawValue }
+        if shortcut.modifiers & UInt32(optionKey) != 0 { modifierFlagsRawValue |= optionModifierRawValue }
+        if shortcut.modifiers & UInt32(controlKey) != 0 { modifierFlagsRawValue |= controlModifierRawValue }
+        if shortcut.modifiers & UInt32(shiftKey) != 0 { modifierFlagsRawValue |= shiftModifierRawValue }
+
+        return HotkeyBinding(
+            keyCode: UInt16(shortcut.keyCode),
+            modifierFlagsRawValue: modifierFlagsRawValue,
+            keyDisplay: keyDisplay(for: UInt16(shortcut.keyCode)),
+            modifierKeyRawValue: nil
+        )
+    }
+
+    static func keyDisplay(for keyCode: UInt16) -> String {
+        let table: [UInt16: String] = [
+            49: "Space", 36: "Return", 48: "Tab", 53: "Escape",
+            18: "1", 19: "2", 20: "3", 21: "4", 23: "5", 22: "6", 26: "7", 28: "8", 25: "9", 29: "0",
+            0: "A", 11: "B", 8: "C", 2: "D", 14: "E", 3: "F", 5: "G", 4: "H", 34: "I", 38: "J", 40: "K", 37: "L",
+            46: "M", 45: "N", 31: "O", 35: "P", 12: "Q", 15: "R", 1: "S", 17: "T", 32: "U", 9: "V", 13: "W", 7: "X",
+            16: "Y", 6: "Z", 63: "Fn"
+        ]
+        return table[keyCode] ?? "Key \(keyCode)"
+    }
+
+    private static func modifierNames(from flags: UInt) -> [String] {
+        var parts: [String] = []
+        if flags & controlModifierRawValue != 0 { parts.append("Control") }
+        if flags & optionModifierRawValue != 0 { parts.append("Option") }
+        if flags & shiftModifierRawValue != 0 { parts.append("Shift") }
+        if flags & superModifierRawValue != 0 { parts.append("Super") }
+        if flags & commandModifierRawValue != 0 { parts.append("Command") }
+        return parts
+    }
+}
+
+struct PlatformTriggerBindings: Codable, Equatable, Sendable {
+    var macos: HotkeyBinding = .defaultFunctionKey
+    var windows: HotkeyBinding = .windowsDefault
+    var linux: HotkeyBinding = .linuxDefault
+}
+
+struct DictationTriggerSettings: Codable, Equatable, Sendable {
+    var mode: TriggerMode = .hold
+    var bindings: PlatformTriggerBindings = .init()
 }
 
 enum OverlayStatus: Equatable, Sendable {
@@ -434,7 +1007,11 @@ struct AppSettings: Codable, Equatable, Sendable {
     var preferredLanguageID: String = "en-US"
     var selectedWhisperModelID: String = "base"
     var selectedParakeetModelID: String = "parakeet-tdt-0.6b-v3"
+    var styleSettings: StyleSettings = .init()
+    var dictationTrigger: DictationTriggerSettings = .init()
     var hotkey: KeyboardShortcut = .defaultShortcut
+    var hotkeyEnabled: Bool = true
+    var functionKeyFallbackMode: FunctionKeyFallbackMode = .automatic
     var pasteMode: PasteMode = .autoPaste
     var menuBarEnabled: Bool = true
     var showOverlay: Bool = true
@@ -442,9 +1019,92 @@ struct AppSettings: Codable, Equatable, Sendable {
     var lastAppTab: AppTab = .home
     var lastSettingsTab: SettingsTab = .preferences
 
+    enum CodingKeys: String, CodingKey {
+        case selectedProvider
+        case preferredLanguageID
+        case selectedWhisperModelID
+        case selectedParakeetModelID
+        case styleSettings
+        case dictationTrigger
+        case hotkey
+        case hotkeyEnabled
+        case hotkeyTriggerMode
+        case hotkeyBinding
+        case functionKeyFallbackMode
+        case pasteMode
+        case menuBarEnabled
+        case showOverlay
+        case onboardingCompleted
+        case lastAppTab
+        case lastSettingsTab
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        selectedProvider = try container.decodeIfPresent(ProviderID.self, forKey: .selectedProvider) ?? .appleSpeech
+        preferredLanguageID = try container.decodeIfPresent(String.self, forKey: .preferredLanguageID) ?? "en-US"
+        selectedWhisperModelID = try container.decodeIfPresent(String.self, forKey: .selectedWhisperModelID) ?? "base"
+        selectedParakeetModelID = try container.decodeIfPresent(String.self, forKey: .selectedParakeetModelID) ?? "parakeet-tdt-0.6b-v3"
+        styleSettings = try container.decodeIfPresent(StyleSettings.self, forKey: .styleSettings) ?? .init()
+        dictationTrigger = try container.decodeIfPresent(DictationTriggerSettings.self, forKey: .dictationTrigger) ?? .init()
+        hotkey = try container.decodeIfPresent(KeyboardShortcut.self, forKey: .hotkey) ?? .defaultShortcut
+        hotkeyEnabled = try container.decodeIfPresent(Bool.self, forKey: .hotkeyEnabled) ?? true
+        let legacyTriggerMode = try container.decodeIfPresent(HotkeyTriggerMode.self, forKey: .hotkeyTriggerMode)
+        let legacyBinding = try container.decodeIfPresent(HotkeyBinding.self, forKey: .hotkeyBinding)
+        if container.contains(.dictationTrigger) == false {
+            dictationTrigger.mode = legacyTriggerMode ?? .hold
+            dictationTrigger.bindings.macos = legacyBinding ?? HotkeyBinding.fromLegacyShortcut(hotkey)
+        } else {
+            if let legacyTriggerMode {
+                dictationTrigger.mode = legacyTriggerMode
+            }
+            if let legacyBinding {
+                dictationTrigger.bindings.macos = legacyBinding
+            }
+        }
+        functionKeyFallbackMode = try container.decodeIfPresent(FunctionKeyFallbackMode.self, forKey: .functionKeyFallbackMode) ?? .automatic
+        pasteMode = try container.decodeIfPresent(PasteMode.self, forKey: .pasteMode) ?? .autoPaste
+        menuBarEnabled = try container.decodeIfPresent(Bool.self, forKey: .menuBarEnabled) ?? true
+        showOverlay = try container.decodeIfPresent(Bool.self, forKey: .showOverlay) ?? true
+        onboardingCompleted = try container.decodeIfPresent(Bool.self, forKey: .onboardingCompleted) ?? false
+        lastAppTab = try container.decodeIfPresent(AppTab.self, forKey: .lastAppTab) ?? .home
+        lastSettingsTab = try container.decodeIfPresent(SettingsTab.self, forKey: .lastSettingsTab) ?? .preferences
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(selectedProvider, forKey: .selectedProvider)
+        try container.encode(preferredLanguageID, forKey: .preferredLanguageID)
+        try container.encode(selectedWhisperModelID, forKey: .selectedWhisperModelID)
+        try container.encode(selectedParakeetModelID, forKey: .selectedParakeetModelID)
+        try container.encode(styleSettings, forKey: .styleSettings)
+        try container.encode(dictationTrigger, forKey: .dictationTrigger)
+        try container.encode(hotkey, forKey: .hotkey)
+        try container.encode(hotkeyEnabled, forKey: .hotkeyEnabled)
+        try container.encode(functionKeyFallbackMode, forKey: .functionKeyFallbackMode)
+        try container.encode(pasteMode, forKey: .pasteMode)
+        try container.encode(menuBarEnabled, forKey: .menuBarEnabled)
+        try container.encode(showOverlay, forKey: .showOverlay)
+        try container.encode(onboardingCompleted, forKey: .onboardingCompleted)
+        try container.encode(lastAppTab, forKey: .lastAppTab)
+        try container.encode(lastSettingsTab, forKey: .lastSettingsTab)
+    }
+
     var preferredLanguage: LanguageSelection {
         get { LanguageSelection(identifier: preferredLanguageID) }
         set { preferredLanguageID = newValue.identifier }
+    }
+
+    var hotkeyTriggerMode: HotkeyTriggerMode {
+        get { dictationTrigger.mode }
+        set { dictationTrigger.mode = newValue }
+    }
+
+    var hotkeyBinding: HotkeyBinding {
+        get { dictationTrigger.bindings.macos }
+        set { dictationTrigger.bindings.macos = newValue }
     }
 }
 
@@ -452,6 +1112,27 @@ struct PasteTarget: Sendable, Equatable {
     var appName: String?
     var bundleIdentifier: String?
     var processIdentifier: pid_t?
+    var windowTitle: String?
+    var focusedElementRole: String?
+    var focusedElementSubrole: String?
+    var focusedElementTitle: String?
+    var focusedElementPlaceholder: String?
+    var focusedElementDescription: String?
+    var focusedValueSnippet: String?
+    var isEditableTextInput: Bool
+    var isSecureTextInput: Bool
+
+    var editableRoleClass: String? {
+        let combined = [focusedElementRole, focusedElementSubrole]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .joined(separator: " ")
+        if combined.contains("axtextarea") { return "text_area" }
+        if combined.contains("axsearchfield") { return "search_field" }
+        if combined.contains("axtextfield") || combined.contains("axtextinput") { return "text_field" }
+        if combined.contains("axcombobox") { return "combo_box" }
+        if combined.contains("axwebarea") { return "web_area" }
+        return nil
+    }
 }
 
 enum PasteResult: Equatable, Sendable {
@@ -467,6 +1148,74 @@ enum PasteResult: Equatable, Sendable {
             return message
         }
     }
+}
+
+enum PasteFallbackReason: String, Codable, Sendable {
+    case autoPasteDisabled
+    case accessibilityUnavailable
+    case appRestoreFailed
+    case fieldNotEditable
+    case fieldSecure
+    case fieldMismatch
+    case pasteEventFailed
+    case clipboardWriteFailed
+    case nothingToInsert
+
+    var title: String {
+        switch self {
+        case .autoPasteDisabled:
+            return "Auto-paste disabled"
+        case .accessibilityUnavailable:
+            return "Accessibility unavailable"
+        case .appRestoreFailed:
+            return "App restore failed"
+        case .fieldNotEditable:
+            return "Field not editable"
+        case .fieldSecure:
+            return "Secure field"
+        case .fieldMismatch:
+            return "Field no longer matched"
+        case .pasteEventFailed:
+            return "Paste event failed"
+        case .clipboardWriteFailed:
+            return "Clipboard write failed"
+        case .nothingToInsert:
+            return "Nothing to insert"
+        }
+    }
+}
+
+enum PasteInsertionOutcome: String, Codable, Sendable {
+    case pasted
+    case copiedSilently = "copied_silently"
+    case failed
+
+    var title: String {
+        switch self {
+        case .pasted:
+            return "Pasted"
+        case .copiedSilently:
+            return "Copied silently"
+        case .failed:
+            return "Failed"
+        }
+    }
+}
+
+struct PasteInsertionDiagnostic: Equatable, Codable, Sendable {
+    var requestedMode: PasteMode
+    var targetAppName: String?
+    var targetWindowTitle: String?
+    var targetFieldRole: String?
+    var targetFieldTitle: String?
+    var targetFieldPlaceholder: String?
+    var outcome: PasteInsertionOutcome
+    var fallbackReason: PasteFallbackReason?
+}
+
+struct PasteOperationResult: Equatable, Sendable {
+    var result: PasteResult
+    var diagnostic: PasteInsertionDiagnostic
 }
 
 struct ModelDescriptor: Identifiable, Codable, Equatable, Sendable {
@@ -598,7 +1347,7 @@ protocol PasteServiceProtocol: Sendable {
         to target: PasteTarget?,
         pasteMode: PasteMode,
         accessibilityGranted: Bool
-    ) -> PasteResult
+    ) -> PasteOperationResult
 }
 
 protocol HistoryStoreProtocol: AnyObject, Sendable {

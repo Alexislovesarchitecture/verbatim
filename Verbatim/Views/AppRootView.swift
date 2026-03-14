@@ -130,8 +130,8 @@ struct AppRootView: View {
                     ) {
                         HStack(spacing: 10) {
                             HotkeyRecorderField(shortcut: Binding(
-                                get: { model.settings.hotkey },
-                                set: { model.updateShortcut($0) }
+                                get: { model.settings.hotkeyBinding },
+                                set: { model.updateHotkeyBinding($0) }
                             ))
                             .frame(width: 220, height: 36)
 
@@ -412,6 +412,8 @@ struct AppRootView: View {
             switch model.selectedAppTab {
             case .home:
                 homePage
+            case .style:
+                StylePageView(model: model)
             case .dictionary:
                 dictionaryPage
             }
@@ -902,7 +904,7 @@ struct AppRootView: View {
         let capability = model.providerCapability(for: provider)
         let statusMessage = capability.kind == .unsupported ? capability.detail : model.providerStatus(for: provider).message
 
-        VStack(alignment: .leading, spacing: 8) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Text(provider.title)
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
@@ -931,11 +933,32 @@ struct AppRootView: View {
     }
 
     private var hotkeysPanel: some View {
-        settingsCard("Tap-to-Toggle Shortcut") {
+        settingsCard("Global Hotkey") {
+            Toggle(isOn: Binding(
+                get: { model.settings.hotkeyEnabled },
+                set: { model.updateHotkeyEnabled($0) }
+            )) {
+                Text("Enable global activation")
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+            }
+            .toggleStyle(.switch)
+            .disabled(model.featureCapability(for: .hotkeyCapture).isSupported == false)
+
+            Picker("Trigger mode", selection: Binding(
+                get: { model.settings.hotkeyTriggerMode },
+                set: { model.updateHotkeyTriggerMode($0) }
+            )) {
+                ForEach(HotkeyTriggerMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            .disabled(model.settings.hotkeyEnabled == false || model.featureCapability(for: .hotkeyCapture).isSupported == false)
+
             HStack(spacing: 10) {
                 HotkeyRecorderField(shortcut: Binding(
-                    get: { model.settings.hotkey },
-                    set: { model.updateShortcut($0) }
+                    get: { model.settings.hotkeyBinding },
+                    set: { model.updateHotkeyBinding($0) }
                 ))
                 .frame(width: 220, height: 36)
 
@@ -943,16 +966,48 @@ struct AppRootView: View {
                     model.beginHotkeyCapture()
                 }
                 .applyGlassButtonStyle(prominent: true)
-                .disabled(model.isCapturingHotkey)
+                .disabled(model.isCapturingHotkey || model.settings.hotkeyEnabled == false)
 
-                Button("Use Default") {
-                    model.updateShortcut(.defaultShortcut)
+                Button("Use Fn / Globe") {
+                    model.resetHotkeyBindingToDefault()
                 }
                 .applyGlassButtonStyle()
+                .disabled(model.settings.hotkeyEnabled == false)
             }
             .disabled(model.featureCapability(for: .hotkeyCapture).isSupported == false)
 
-            Text("Current shortcut: \(model.settings.hotkey.displayTitle)")
+            if model.settings.hotkeyBinding.usesFn {
+                Picker("Fn / Globe fallback", selection: Binding(
+                    get: { model.settings.functionKeyFallbackMode },
+                    set: { model.updateFunctionKeyFallbackMode($0) }
+                )) {
+                    ForEach(FunctionKeyFallbackMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .disabled(model.settings.hotkeyEnabled == false || model.featureCapability(for: .hotkeyCapture).isSupported == false)
+            }
+
+            Text("Requested binding: \(model.settings.hotkeyBinding.displayTitle)")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            Text("Effective binding: \(model.hotkeyEffectiveBindingTitle)")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            Text("Backend: \(model.hotkeyBackendTitle)")
+                .font(.system(size: 13, weight: .medium, design: .rounded))
+                .foregroundStyle(VerbatimPalette.mutedInk)
+
+            if let fallbackReason = model.hotkeyFallbackReason, fallbackReason.isEmpty == false {
+                Text(fallbackReason)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppSectionAccent.amber.tint)
+            }
+
+            Text(model.hotkeyStatusMessage)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(VerbatimPalette.mutedInk)
 
@@ -1005,7 +1060,7 @@ struct AppRootView: View {
 
                 permissionRow(
                     title: "Accessibility",
-                    subtitle: "Needed only for automatic paste after transcription.",
+                    subtitle: "Needed for global hotkeys and automatic paste after transcription.",
                     granted: model.permissionsManager.accessibilityAuthorized,
                     actionTitle: model.permissionsManager.accessibilityAuthorized ? "Granted" : "Grant"
                 ) {
@@ -1090,7 +1145,15 @@ struct AppRootView: View {
             supportCard(
                 title: "Hotkey",
                 subtitle: "Current global shortcut",
-                detail: model.settings.hotkey.displayTitle
+                detail: [
+                    "Requested: \(model.settings.hotkeyBinding.displayTitle)",
+                    "Effective: \(model.hotkeyEffectiveBindingTitle)",
+                    "Backend: \(model.hotkeyBackendTitle)",
+                    "Trigger mode: \(model.settings.hotkeyTriggerMode.title)",
+                    model.hotkeyFallbackReason
+                ]
+                .compactMap { $0 }
+                .joined(separator: "\n")
             )
 
             supportCard(
@@ -1108,7 +1171,7 @@ struct AppRootView: View {
             supportCard(
                 title: "Local Runtimes",
                 subtitle: "Whisper uses whisper-server, Parakeet uses sherpa-onnx, and Apple Speech uses macOS system assets.",
-                detail: "Everything continues to work offline after models and Apple language assets are installed."
+                detail: "Everything continues to work offline after models and Apple language assets are installed.\n\(model.providerPrewarmStatusMessage)"
             )
 
             supportCard(
@@ -1387,7 +1450,7 @@ struct AppRootView: View {
 }
 
 struct HotkeyRecorderField: NSViewRepresentable {
-    @Binding var shortcut: KeyboardShortcut
+    @Binding var shortcut: HotkeyBinding
 
     func makeCoordinator() -> Coordinator {
         Coordinator(shortcut: $shortcut)
@@ -1396,7 +1459,7 @@ struct HotkeyRecorderField: NSViewRepresentable {
     func makeNSView(context: Context) -> ShortcutCaptureField {
         let field = ShortcutCaptureField()
         field.onShortcut = { event in
-            guard let shortcut = KeyboardShortcut.from(event: event) else { return }
+            guard let shortcut = HotkeyBinding.from(event: event) else { return }
             context.coordinator.shortcut.wrappedValue = shortcut
             field.stringValue = shortcut.displayTitle
         }
@@ -1409,9 +1472,9 @@ struct HotkeyRecorderField: NSViewRepresentable {
     }
 
     final class Coordinator {
-        var shortcut: Binding<KeyboardShortcut>
+        var shortcut: Binding<HotkeyBinding>
 
-        init(shortcut: Binding<KeyboardShortcut>) {
+        init(shortcut: Binding<HotkeyBinding>) {
             self.shortcut = shortcut
         }
     }
@@ -1437,6 +1500,10 @@ final class ShortcutCaptureField: NSTextField {
     override var acceptsFirstResponder: Bool { true }
 
     override func keyDown(with event: NSEvent) {
+        onShortcut?(event)
+    }
+
+    override func flagsChanged(with event: NSEvent) {
         onShortcut?(event)
     }
 }

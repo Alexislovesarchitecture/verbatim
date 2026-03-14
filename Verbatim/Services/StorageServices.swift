@@ -86,6 +86,7 @@ private enum LegacySettingsMigrator {
     private static let localModelIDKey = "VerbatimSwiftMVP.LocalModelID"
     private static let setupCompletedKey = "VerbatimSwiftMVP.SetupCompleted"
     private static let interactionSettingsKey = "VerbatimSwiftMVP.InteractionSettingsV1"
+    private static let refineSettingsKey = "VerbatimSwiftMVP.RefineSettingsV1"
 
     private enum LegacyWhisperModel: String {
         case whisperTiny = "whisper-tiny"
@@ -109,12 +110,26 @@ private enum LegacySettingsMigrator {
         var hotkeyBinding: LegacyHotkeyBinding?
         var showListeningIndicator: Bool?
         var autoPasteAfterInsert: Bool?
+        var hotkeyEnabled: Bool?
+        var hotkeyTriggerMode: String?
+        var functionKeyFallbackMode: String?
     }
 
     private struct LegacyHotkeyBinding: Decodable {
         var keyCode: UInt16
         var modifierFlagsRawValue: UInt
         var modifierKeyRawValue: UInt?
+    }
+
+    private struct LegacyRefineSettings: Decodable {
+        var workEnabled: Bool?
+        var emailEnabled: Bool?
+        var personalEnabled: Bool?
+        var otherEnabled: Bool?
+        var workPreset: StylePreset?
+        var emailPreset: StylePreset?
+        var personalPreset: StylePreset?
+        var otherPreset: StylePreset?
     }
 
     private enum LegacyModifierFlags {
@@ -168,28 +183,92 @@ private enum LegacySettingsMigrator {
                 settings.pasteMode = autoPasteAfterInsert ? .autoPaste : .clipboardOnly
                 didChange = true
             }
-            if let legacyHotkey = interaction.hotkeyBinding,
-               let shortcut = keyboardShortcut(from: legacyHotkey) {
-                settings.hotkey = shortcut
+            if let hotkeyEnabled = interaction.hotkeyEnabled {
+                settings.hotkeyEnabled = hotkeyEnabled
                 didChange = true
             }
+            if let hotkeyTriggerMode = interaction.hotkeyTriggerMode,
+               let resolvedMode = HotkeyTriggerMode(rawValue: hotkeyTriggerMode) {
+                settings.hotkeyTriggerMode = resolvedMode
+                didChange = true
+            }
+            if let fallbackMode = interaction.functionKeyFallbackMode,
+               let resolvedFallback = FunctionKeyFallbackMode(rawValue: fallbackMode) {
+                settings.functionKeyFallbackMode = resolvedFallback
+                didChange = true
+            }
+            if let legacyHotkey = interaction.hotkeyBinding,
+               let binding = hotkeyBinding(from: legacyHotkey) {
+                settings.hotkeyBinding = binding
+                if binding.modifierKeyRawValue == nil {
+                    settings.hotkey = keyboardShortcut(from: binding) ?? settings.hotkey
+                }
+                didChange = true
+            }
+        }
+
+        if let data = defaults.data(forKey: refineSettingsKey),
+           let refine = try? JSONDecoder().decode(LegacyRefineSettings.self, from: data) {
+            var styleSettings = settings.styleSettings
+            if let workEnabled = refine.workEnabled {
+                styleSettings.setEnabled(workEnabled, for: .workMessages)
+                didChange = true
+            }
+            if let emailEnabled = refine.emailEnabled {
+                styleSettings.setEnabled(emailEnabled, for: .email)
+                didChange = true
+            }
+            if let personalEnabled = refine.personalEnabled {
+                styleSettings.setEnabled(personalEnabled, for: .personalMessages)
+                didChange = true
+            }
+            if let otherEnabled = refine.otherEnabled {
+                styleSettings.setEnabled(otherEnabled, for: .other)
+                didChange = true
+            }
+            if let workPreset = refine.workPreset {
+                styleSettings.setPreset(workPreset, for: .workMessages)
+                didChange = true
+            }
+            if let emailPreset = refine.emailPreset {
+                styleSettings.setPreset(emailPreset, for: .email)
+                didChange = true
+            }
+            if let personalPreset = refine.personalPreset {
+                styleSettings.setPreset(personalPreset, for: .personalMessages)
+                didChange = true
+            }
+            if let otherPreset = refine.otherPreset {
+                styleSettings.setPreset(otherPreset, for: .other)
+                didChange = true
+            }
+            settings.styleSettings = styleSettings
         }
 
         return didChange ? settings : nil
     }
 
-    private static func keyboardShortcut(from legacy: LegacyHotkeyBinding) -> KeyboardShortcut? {
-        guard legacy.modifierKeyRawValue == nil else { return nil }
-        guard legacy.modifierFlagsRawValue & LegacyModifierFlags.function == 0 else { return nil }
+    private static func hotkeyBinding(from legacy: LegacyHotkeyBinding) -> HotkeyBinding? {
+        let keyDisplay = HotkeyBinding.keyDisplay(for: legacy.keyCode)
+        return HotkeyBinding(
+            keyCode: legacy.keyCode,
+            modifierFlagsRawValue: legacy.modifierFlagsRawValue,
+            keyDisplay: keyDisplay,
+            modifierKeyRawValue: legacy.modifierKeyRawValue
+        )
+    }
 
+    private static func keyboardShortcut(from binding: HotkeyBinding) -> KeyboardShortcut? {
+        guard binding.modifierKeyRawValue == nil else { return nil }
+        guard binding.modifierFlagsRawValue & LegacyModifierFlags.function == 0 else { return nil }
         var modifiers: UInt32 = 0
-        if legacy.modifierFlagsRawValue & LegacyModifierFlags.command != 0 { modifiers |= UInt32(cmdKey) }
-        if legacy.modifierFlagsRawValue & LegacyModifierFlags.option != 0 { modifiers |= UInt32(optionKey) }
-        if legacy.modifierFlagsRawValue & LegacyModifierFlags.control != 0 { modifiers |= UInt32(controlKey) }
-        if legacy.modifierFlagsRawValue & LegacyModifierFlags.shift != 0 { modifiers |= UInt32(shiftKey) }
+        if binding.modifierFlagsRawValue & LegacyModifierFlags.command != 0 { modifiers |= UInt32(cmdKey) }
+        if binding.modifierFlagsRawValue & LegacyModifierFlags.option != 0 { modifiers |= UInt32(optionKey) }
+        if binding.modifierFlagsRawValue & LegacyModifierFlags.control != 0 { modifiers |= UInt32(controlKey) }
+        if binding.modifierFlagsRawValue & LegacyModifierFlags.shift != 0 { modifiers |= UInt32(shiftKey) }
 
         guard modifiers != 0 else { return nil }
-        return KeyboardShortcut(keyCode: UInt32(legacy.keyCode), modifiers: modifiers)
+        return KeyboardShortcut(keyCode: UInt32(binding.keyCode), modifiers: modifiers)
     }
 }
 

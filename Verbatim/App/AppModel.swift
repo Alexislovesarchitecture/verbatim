@@ -31,9 +31,16 @@ final class AppModel: ObservableObject {
                         try? await parakeetRuntimeManager.stop()
                     }
                     await refreshProviderState()
+                    await maybePrewarmSelectedProviderIfNeeded(
+                        reason: providerChanged ? "Provider selection changed" : "Model selection changed"
+                    )
                 }
             }
-            if oldValue.hotkey != settings.hotkey {
+            if oldValue.hotkey != settings.hotkey ||
+                oldValue.hotkeyEnabled != settings.hotkeyEnabled ||
+                oldValue.hotkeyTriggerMode != settings.hotkeyTriggerMode ||
+                oldValue.hotkeyBinding != settings.hotkeyBinding ||
+                oldValue.functionKeyFallbackMode != settings.functionKeyFallbackMode {
                 configureHotkey()
             }
             if oldValue.menuBarEnabled != settings.menuBarEnabled {
@@ -69,6 +76,14 @@ final class AppModel: ObservableObject {
     @Published var isPreparing = false
     @Published var isCapturingHotkey = false
     @Published var transientMessage: String?
+    @Published var hotkeyStatusMessage: String = ""
+    @Published var hotkeyEffectiveBindingTitle: String = ""
+    @Published var hotkeyBackendTitle: String = "Unavailable"
+    @Published var hotkeyFallbackReason: String?
+    @Published var providerPrewarmStatusMessage: String = "Provider prewarm is idle."
+    @Published var latestActiveAppContext: ActiveAppContext?
+    @Published var latestStyleEvent: StyleDecisionReport?
+    @Published var latestPasteDiagnostic: PasteInsertionDiagnostic?
 
     let permissionsManager: PermissionsManager
     let paths: VerbatimPaths
@@ -84,11 +99,15 @@ final class AppModel: ObservableObject {
     private let whisperRuntimeManager: WhisperRuntimeManager
     private let parakeetRuntimeManager: ParakeetRuntimeManager
     private let capabilityMatrix: CapabilityMatrix
+    private let activeAppContextService: ActiveAppContextServiceProtocol
+    private let sharedCore: SharedCoreBridgeProtocol
     private let appleProvider: AppleSpeechProvider
     private let whisperProvider: WhisperProvider
     private let parakeetProvider: ParakeetProvider
     private let coordinator: TranscriptionCoordinator
     private let providerFallbackOrder: [ProviderID] = [.whisper, .appleSpeech, .parakeet]
+    private var hotkeyIsPressed = false
+    private var lastHotkeyTapAt: Date?
 
     init() {
         let paths = VerbatimPaths()
@@ -108,6 +127,8 @@ final class AppModel: ObservableObject {
         let logStore = VerbatimLogStore(paths: paths)
         self.logStore = logStore
         self.capabilityMatrix = CapabilityMatrix(manifest: CapabilityManifestRepository.load())
+        self.activeAppContextService = ActiveAppContextService()
+        self.sharedCore = SharedCoreBridge()
 
         let descriptors = ModelManifestRepository.load()
         self.whisperModelManager = WhisperModelManager(descriptors: descriptors, paths: paths, logStore: logStore)
@@ -128,7 +149,8 @@ final class AppModel: ObservableObject {
         self.coordinator = TranscriptionCoordinator(
             recordingManager: RecordingManager(),
             normalizer: AudioNormalizationService(),
-            pasteService: PasteService(),
+            pasteService: PasteService(activeContextService: activeAppContextService),
+            sharedCoreBridge: sharedCore,
             historyStore: historyStore,
             settingsStore: settingsStore,
             providers: [
@@ -146,6 +168,12 @@ final class AppModel: ObservableObject {
             Task { await self?.toggleRecording() }
         }
         statusItemController.setVisible(settings.menuBarEnabled)
+        permissionsManager.onRefresh = { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.configureHotkey()
+                await self?.maybePrewarmSelectedProviderIfNeeded(reason: "App became active")
+            }
+        }
 
         Task { [weak self] in
             await self?.prepare()
@@ -174,6 +202,7 @@ final class AppModel: ObservableObject {
         diagnosticsLogger.info("Startup provider preflight completed")
         logStore.append("Startup provider preflight completed", category: .diagnostics)
         configureHotkey()
+        await maybePrewarmSelectedProviderIfNeeded(reason: "App prepared")
         updateStatusArtifacts()
     }
 
@@ -202,7 +231,12 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            try await coordinator.startRecording(provider: effectiveProvider)
+            let activeContext = activeAppContextService.currentContext()
+            let styleDecision = sharedCore.resolveStyleDecision(context: activeContext, settings: settings.styleSettings)
+            latestActiveAppContext = activeContext
+            latestStyleEvent = styleDecision
+            latestPasteDiagnostic = nil
+            try await coordinator.startRecording(provider: effectiveProvider, activeContext: activeContext, styleDecision: styleDecision)
             applyOverlayStatus(.recording)
         } catch {
             applyOverlayStatus(.error(error.localizedDescription))
@@ -220,9 +254,20 @@ final class AppModel: ObservableObject {
                 accessibilityGranted: permissionsManager.accessibilityAuthorized
             )
             historyItems.insert(outcome.historyItem, at: 0)
-            let message = outcome.pasteResult == .pasted ? "Transcription pasted" : outcome.pasteResult.message
-            applyOverlayStatus(.success(message))
-            transientMessage = message
+            latestStyleEvent = outcome.styleEvent
+            latestPasteDiagnostic = outcome.pasteDiagnostic
+            switch outcome.pasteResult {
+            case .pasted:
+                let message = "Transcription pasted"
+                applyOverlayStatus(.success(message))
+                transientMessage = nil
+            case .copiedOnly:
+                applyOverlayStatus(.idle)
+                transientMessage = nil
+            case .failed(let message):
+                applyOverlayStatus(.error(message))
+                transientMessage = message
+            }
         } catch {
             applyOverlayStatus(.error("Transcription failed"))
             transientMessage = error.localizedDescription
@@ -236,6 +281,7 @@ final class AppModel: ObservableObject {
 
     func promptAccessibility() {
         permissionsManager.requestAccessibilityPrompt()
+        configureHotkey()
     }
 
     func installAppleAssets() async {
@@ -359,6 +405,7 @@ final class AppModel: ObservableObject {
         historyItems = []
         dictionaryEntries = []
         providerDiagnostics = []
+        providerPrewarmStatusMessage = "Provider prewarm is idle."
         settings = AppSettings()
         selectedAppTab = settings.lastAppTab
         selectedSettingsTab = settings.lastSettingsTab
@@ -377,6 +424,28 @@ final class AppModel: ObservableObject {
         isCapturingHotkey = false
     }
 
+    func updateHotkeyBinding(_ binding: HotkeyBinding) {
+        settings.hotkeyBinding = binding
+        isCapturingHotkey = false
+    }
+
+    func updateHotkeyEnabled(_ enabled: Bool) {
+        settings.hotkeyEnabled = enabled
+    }
+
+    func updateHotkeyTriggerMode(_ mode: HotkeyTriggerMode) {
+        settings.hotkeyTriggerMode = mode
+    }
+
+    func updateFunctionKeyFallbackMode(_ mode: FunctionKeyFallbackMode) {
+        settings.functionKeyFallbackMode = mode
+    }
+
+    func resetHotkeyBindingToDefault() {
+        settings.hotkeyBinding = .defaultFunctionKey
+        isCapturingHotkey = false
+    }
+
     func beginHotkeyCapture() {
         isCapturingHotkey = true
     }
@@ -388,6 +457,26 @@ final class AppModel: ObservableObject {
     func selectAppTab(_ tab: AppTab) {
         selectedAppTab = tab
         settings.lastAppTab = tab
+    }
+
+    func stylePreset(for category: StyleCategory) -> StylePreset {
+        settings.styleSettings.configuration(for: category).preset
+    }
+
+    func styleEnabled(for category: StyleCategory) -> Bool {
+        settings.styleSettings.configuration(for: category).enabled
+    }
+
+    func updateStylePreset(_ preset: StylePreset, for category: StyleCategory) {
+        var styleSettings = settings.styleSettings
+        styleSettings.setPreset(preset, for: category)
+        settings.styleSettings = styleSettings
+    }
+
+    func updateStyleEnabled(_ enabled: Bool, for category: StyleCategory) {
+        var styleSettings = settings.styleSettings
+        styleSettings.setEnabled(enabled, for: category)
+        settings.styleSettings = styleSettings
     }
 
     func openSettings(tab: SettingsTab = .preferences) {
@@ -468,6 +557,7 @@ final class AppModel: ObservableObject {
             transientMessage = error.localizedDescription
         }
         await refreshProviderState()
+        await maybePrewarmSelectedProviderIfNeeded(reason: "\(provider.title) runtime restarted")
     }
 
     var currentLanguageOptions: [LanguageSelection] {
@@ -538,12 +628,12 @@ final class AppModel: ObservableObject {
     }
 
     var supportDiagnosticsSummary: String {
-        diagnosticProviderOrder.compactMap { provider in
+        (["Provider prewarm: \(providerPrewarmStatusMessage)"] + diagnosticProviderOrder.compactMap { provider in
             guard let diagnostic = providerDiagnostic(for: provider) else { return nil }
             let runtimeState = diagnostic.runtimeSnapshot?.state.rawValue.capitalized ?? "System Managed"
             let readiness = diagnostic.readiness.kind == .ready ? "Ready" : diagnostic.readiness.message
             return "\(provider.title): \(diagnostic.capability.kind.title) • \(runtimeState) • \(readiness)"
-        }
+        })
         .joined(separator: "\n")
     }
 
@@ -600,8 +690,65 @@ final class AppModel: ObservableObject {
     }
 
     private func configureHotkey() {
-        hotkeyManager.register(shortcut: settings.hotkey) { [weak self] in
-            Task { await self?.toggleRecording() }
+        hotkeyManager.unregister()
+        hotkeyEffectiveBindingTitle = settings.hotkeyBinding.displayTitle
+        hotkeyBackendTitle = "Unavailable"
+        hotkeyFallbackReason = nil
+
+        guard featureCapability(for: .hotkeyCapture).isSupported else {
+            hotkeyStatusMessage = featureCapability(for: .hotkeyCapture).detail
+            return
+        }
+
+        guard settings.hotkeyEnabled else {
+            hotkeyStatusMessage = "Hotkey monitoring is off."
+            hotkeyBackendTitle = "Disabled"
+            return
+        }
+
+        let validation = settings.hotkeyBinding.validationResult
+        if validation.isValid == false {
+            hotkeyStatusMessage = validation.blockingMessage ?? "This hotkey is unavailable."
+            return
+        }
+        let fallbackCandidates = HotkeyBinding.recommendedFallbacks.filter { $0 != settings.hotkeyBinding }
+        sharedCore.prepareTrigger(mode: settings.hotkeyTriggerMode)
+
+        let result = hotkeyManager.register(
+            binding: settings.hotkeyBinding,
+            fallbackMode: settings.functionKeyFallbackMode,
+            fallbackCandidates: fallbackCandidates
+        ) { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.handleInputEvent(event)
+            }
+        }
+
+        let summary = sharedCore.summarizeTriggerState(
+            mode: settings.hotkeyTriggerMode,
+            startResult: result
+        )
+        hotkeyStatusMessage = summary.statusMessage
+        hotkeyEffectiveBindingTitle = summary.effectiveTriggerLabel
+        hotkeyBackendTitle = summary.backendLabel
+        hotkeyFallbackReason = summary.fallbackReason
+    }
+
+    private func handleInputEvent(_ event: InputEvent) {
+        let action = sharedCore.handleInputEvent(
+            event,
+            isRecording: overlayStatus == .recording,
+            timestamp: .now
+        )
+        switch action {
+        case .none:
+            break
+        case .startRecording:
+            Task { await startRecording() }
+        case .stopRecording:
+            Task { await stopRecordingAndTranscribe() }
+        case .cancelRecording:
+            applyOverlayStatus(.idle)
         }
     }
 
@@ -615,6 +762,38 @@ final class AppModel: ObservableObject {
 
     private func updateStatusArtifacts() {
         statusItemController.update(state: overlayStatus, providerName: effectiveProvider.title)
+    }
+
+    private func maybePrewarmSelectedProviderIfNeeded(reason: String) async {
+        guard effectiveProvider == .whisper else {
+            providerPrewarmStatusMessage = "Provider prewarm is unavailable for \(effectiveProvider.title)."
+            return
+        }
+
+        let capability = providerCapability(for: .whisper)
+        guard capability.isSupported else {
+            providerPrewarmStatusMessage = capability.reason ?? "Whisper prewarm is unavailable on this system."
+            return
+        }
+
+        let modelURL = await whisperModelManager.installedURL(for: settings.selectedWhisperModelID)
+        guard FileManager.default.fileExists(atPath: modelURL.path) else {
+            providerPrewarmStatusMessage = "Whisper prewarm is unavailable until the selected model is installed."
+            return
+        }
+
+        do {
+            _ = try await whisperRuntimeManager.ensureRunning(modelURL: modelURL)
+            providerPrewarmStatusMessage = "Whisper runtime is prewarmed for \(settings.selectedWhisperModelID)."
+            diagnosticsLogger.info("Whisper runtime prewarmed after \(reason, privacy: .public)")
+            logStore.append("Whisper runtime prewarmed after \(reason)", category: .runtime)
+        } catch {
+            providerPrewarmStatusMessage = "Whisper prewarm failed: \(error.localizedDescription)"
+            diagnosticsLogger.error("Whisper prewarm failed after \(reason, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logStore.append("Whisper prewarm failed after \(reason): \(error.localizedDescription)", category: .runtime)
+        }
+
+        await refreshProviderState()
     }
 
     private func openMainWindow() {
@@ -699,10 +878,36 @@ final class AppModel: ObservableObject {
             "System profile: \(systemProfile.summary)",
             "Stored provider: \(settings.selectedProvider.title)",
             "Effective provider: \(effectiveProvider.title)",
+            "Requested hotkey: \(settings.hotkeyBinding.displayTitle)",
+            "Effective hotkey: \(hotkeyEffectiveBindingTitle)",
+            "Hotkey backend: \(hotkeyBackendTitle)",
+            "Trigger mode: \(settings.hotkeyTriggerMode.title)",
+            "Provider prewarm: \(providerPrewarmStatusMessage)",
             "Storage: \(paths.rootURL.path)",
             "Logs: \(paths.logsRoot.path)",
             ""
         ]
+
+        if let hotkeyFallbackReason, hotkeyFallbackReason.isEmpty == false {
+            lines.append("Hotkey fallback: \(hotkeyFallbackReason)")
+            lines.append("")
+        }
+
+        if let latestActiveAppContext {
+            lines.append("Latest context: \(latestActiveAppContext.summary)")
+            if let role = latestActiveAppContext.focusedElementRole, role.isEmpty == false {
+                lines.append("Focused role: \(role)")
+            }
+        }
+        if let latestStyleEvent {
+            lines.append("Latest style category: \(latestStyleEvent.category.title)")
+            lines.append("Latest style preset: \(latestStyleEvent.preset.title)")
+            lines.append("Latest style source: \(latestStyleEvent.source.title)")
+            if let reason = latestStyleEvent.reason, reason.isEmpty == false {
+                lines.append("Latest style reason: \(reason)")
+            }
+            lines.append("")
+        }
 
         for diagnostic in providerDiagnostics {
             lines.append("\(diagnostic.provider.title)")

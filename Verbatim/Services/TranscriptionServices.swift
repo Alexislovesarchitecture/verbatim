@@ -1225,7 +1225,9 @@ enum ParakeetWebSocketClient {
 struct CoordinatorOutcome: Equatable {
     var result: TranscriptionResult
     var pasteResult: PasteResult
+    var pasteDiagnostic: PasteInsertionDiagnostic
     var historyItem: HistoryItem
+    var styleEvent: StyleDecisionReport
 }
 
 @MainActor
@@ -1233,16 +1235,20 @@ final class TranscriptionCoordinator {
     private let recordingManager: RecordingManagerProtocol
     private let normalizer: AudioNormalizationServiceProtocol
     private let pasteService: PasteServiceProtocol
+    private let sharedCoreBridge: SharedCoreBridgeProtocol
     private let historyStore: HistoryStoreProtocol
     private let settingsStore: SettingsStoreProtocol
     private let logStore: VerbatimLogStore
     private var providers: [ProviderID: any TranscriptionProvider]
     private var currentTarget: PasteTarget?
+    private var currentContext: ActiveAppContext?
+    private var currentStyleDecision: StyleDecisionReport?
 
     init(
         recordingManager: RecordingManagerProtocol,
         normalizer: AudioNormalizationServiceProtocol,
         pasteService: PasteServiceProtocol,
+        sharedCoreBridge: SharedCoreBridgeProtocol,
         historyStore: HistoryStoreProtocol,
         settingsStore: SettingsStoreProtocol,
         providers: [ProviderID: any TranscriptionProvider],
@@ -1251,14 +1257,17 @@ final class TranscriptionCoordinator {
         self.recordingManager = recordingManager
         self.normalizer = normalizer
         self.pasteService = pasteService
+        self.sharedCoreBridge = sharedCoreBridge
         self.historyStore = historyStore
         self.settingsStore = settingsStore
         self.logStore = logStore ?? VerbatimLogStore(paths: VerbatimPaths())
         self.providers = providers
     }
 
-    func startRecording(provider providerID: ProviderID) async throws {
+    func startRecording(provider providerID: ProviderID, activeContext: ActiveAppContext?, styleDecision: StyleDecisionReport?) async throws {
         currentTarget = pasteService.captureTarget()
+        currentContext = activeContext
+        currentStyleDecision = styleDecision
         transcriptionLogger.info("Starting recording for provider \(providerID.rawValue, privacy: .public)")
         logStore.append("Starting recording for provider \(providerID.rawValue)", category: .transcription)
         try await recordingManager.startRecording()
@@ -1285,8 +1294,14 @@ final class TranscriptionCoordinator {
                 language: language,
                 dictionaryHints: dictionaryEntries
             )
-            let pasteResult = pasteService.paste(
+            let processed = sharedCoreBridge.processTranscript(
                 text: result.finalText,
+                context: currentContext,
+                settings: settings.styleSettings,
+                resolvedDecision: currentStyleDecision
+            )
+            let pasteOperation = pasteService.paste(
+                text: processed.finalText,
                 to: currentTarget,
                 pasteMode: settings.pasteMode,
                 accessibilityGranted: accessibilityGranted
@@ -1295,12 +1310,21 @@ final class TranscriptionCoordinator {
                 provider: result.provider,
                 language: result.language,
                 originalText: result.originalText,
-                finalText: result.finalText,
-                error: pasteResult == .pasted ? nil : pasteResult.message
+                finalText: processed.finalText,
+                error: pasteOperation.result == .pasted ? nil : pasteOperation.result.message
             )
             transcriptionLogger.info("Transcription request finished for provider \(result.provider.rawValue, privacy: .public)")
             logStore.append("Transcription request finished for provider \(result.provider.rawValue)", category: .transcription)
-            return CoordinatorOutcome(result: result, pasteResult: pasteResult, historyItem: historyItem)
+            currentTarget = nil
+            currentContext = nil
+            currentStyleDecision = nil
+            return CoordinatorOutcome(
+                result: result,
+                pasteResult: pasteOperation.result,
+                pasteDiagnostic: pasteOperation.diagnostic,
+                historyItem: historyItem,
+                styleEvent: processed.decision
+            )
         } catch {
             transcriptionLogger.error("Transcription request failed for provider \(providerID.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
             logStore.append("Transcription request failed for provider \(providerID.rawValue): \(error.localizedDescription)", category: .transcription)
@@ -1311,6 +1335,9 @@ final class TranscriptionCoordinator {
                 finalText: "",
                 error: error.localizedDescription
             )
+            currentTarget = nil
+            currentContext = nil
+            currentStyleDecision = nil
             throw NSError(domain: "VerbatimCoordinator", code: Int(historyItem.id), userInfo: [NSLocalizedDescriptionKey: error.localizedDescription])
         }
     }

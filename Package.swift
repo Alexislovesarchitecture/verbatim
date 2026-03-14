@@ -19,7 +19,8 @@ let package = Package(
         "Assets.xcassets",
       ],
       resources: [
-        .process("Resources")
+        .process("Resources"),
+        .copy("RustRuntime"),
       ],
       linkerSettings: [
         .linkedLibrary("sqlite3"),

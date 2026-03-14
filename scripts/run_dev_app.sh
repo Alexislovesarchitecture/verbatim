@@ -28,6 +28,7 @@ for arg in "$@"; do
   esac
 done
 
+./scripts/build_rust_core.sh || true
 swift build
 
 rm -rf "$app_bundle"

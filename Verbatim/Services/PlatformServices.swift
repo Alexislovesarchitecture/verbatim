@@ -16,6 +16,7 @@ private var verbatimHotkeyCallback: (() -> Void)?
 final class PermissionsManager: ObservableObject {
     @Published private(set) var microphoneAuthorized = false
     @Published private(set) var accessibilityAuthorized = false
+    var onRefresh: (() -> Void)?
 
     private var observers: [NSObjectProtocol] = []
 
@@ -44,6 +45,7 @@ final class PermissionsManager: ObservableObject {
     func refresh() {
         microphoneAuthorized = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         accessibilityAuthorized = AXIsProcessTrusted()
+        onRefresh?()
     }
 
     func requestMicrophone() async -> Bool {
@@ -83,13 +85,36 @@ final class PermissionsManager: ObservableObject {
 }
 
 final class PasteService: PasteServiceProtocol, @unchecked Sendable {
+    private let activeContextService: ActiveAppContextServiceProtocol
+    private let restoreHandler: ((PasteTarget) -> Bool)?
+    private let pasteEventHandler: (() -> Bool)?
+
+    init(
+        activeContextService: ActiveAppContextServiceProtocol = ActiveAppContextService(),
+        restoreHandler: ((PasteTarget) -> Bool)? = nil,
+        pasteEventHandler: (() -> Bool)? = nil
+    ) {
+        self.activeContextService = activeContextService
+        self.restoreHandler = restoreHandler
+        self.pasteEventHandler = pasteEventHandler
+    }
+
     func captureTarget() -> PasteTarget? {
 #if canImport(AppKit)
-        let app = NSWorkspace.shared.frontmostApplication
+        let context = activeContextService.currentContext()
         return PasteTarget(
-            appName: app?.localizedName,
-            bundleIdentifier: app?.bundleIdentifier,
-            processIdentifier: app?.processIdentifier
+            appName: context.appName,
+            bundleIdentifier: context.bundleID,
+            processIdentifier: context.processIdentifier,
+            windowTitle: context.windowTitle,
+            focusedElementRole: context.focusedElementRole,
+            focusedElementSubrole: context.focusedElementSubrole,
+            focusedElementTitle: context.focusedElementTitle,
+            focusedElementPlaceholder: context.focusedElementPlaceholder,
+            focusedElementDescription: context.focusedElementDescription,
+            focusedValueSnippet: context.focusedValueSnippet,
+            isEditableTextInput: context.isEditableTextInput,
+            isSecureTextInput: context.isSecureTextInput
         )
 #else
         return nil
@@ -101,37 +126,123 @@ final class PasteService: PasteServiceProtocol, @unchecked Sendable {
         to target: PasteTarget?,
         pasteMode: PasteMode,
         accessibilityGranted: Bool
-    ) -> PasteResult {
+    ) -> PasteOperationResult {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.isEmpty == false else {
-            return .failed("Nothing to insert.")
+            return finish(
+                result: .failed("Nothing to insert."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .failed,
+                fallbackReason: .nothingToInsert
+            )
         }
 
         NSPasteboard.general.clearContents()
         guard NSPasteboard.general.setString(trimmed, forType: .string) else {
-            return .failed("Could not copy text to the clipboard.")
+            return finish(
+                result: .failed("Could not copy text to the clipboard."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .failed,
+                fallbackReason: .clipboardWriteFailed
+            )
         }
 
         guard pasteMode == .autoPaste else {
-            return .copiedOnly("Copied to clipboard.")
+            return finish(
+                result: .copiedOnly("Copied to clipboard."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .autoPasteDisabled
+            )
         }
 
         guard accessibilityGranted else {
-            return .copiedOnly("Copied to clipboard. Enable Accessibility for auto-paste.")
+            return finish(
+                result: .copiedOnly("Copied to clipboard. Enable Accessibility for auto-paste."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .accessibilityUnavailable
+            )
         }
 
-        if let target, restore(target: target) == false {
-            return .copiedOnly("Copied to clipboard. The target app could not be restored.")
+        guard let target else {
+            return finish(
+                result: .copiedOnly("Copied to clipboard. The target field could not be recovered."),
+                target: nil,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .fieldMismatch
+            )
+        }
+
+        if restore(target: target) == false {
+            return finish(
+                result: .copiedOnly("Copied to clipboard. The target app could not be restored."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .appRestoreFailed
+            )
+        }
+
+        let currentContext = activeContextService.currentContext()
+        guard currentContext.isEditableTextInput else {
+            return finish(
+                result: .copiedOnly("Copied to clipboard. The target field is not editable."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .fieldNotEditable
+            )
+        }
+
+        guard currentContext.isSecureTextInput == false else {
+            return finish(
+                result: .copiedOnly("Copied to clipboard. The target field is secure."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .fieldSecure
+            )
+        }
+
+        guard targetMatchesCurrentContext(target: target, current: currentContext) else {
+            return finish(
+                result: .copiedOnly("Copied to clipboard. The target field no longer matched."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .fieldMismatch
+            )
         }
 
         guard performPasteEvent() else {
-            return .copiedOnly("Copied to clipboard. Paste manually in the target app.")
+            return finish(
+                result: .copiedOnly("Copied to clipboard. Paste manually in the target app."),
+                target: target,
+                requestedMode: pasteMode,
+                outcome: .copiedSilently,
+                fallbackReason: .pasteEventFailed
+            )
         }
 
-        return .pasted
+        return finish(
+            result: .pasted,
+            target: target,
+            requestedMode: pasteMode,
+            outcome: .pasted,
+            fallbackReason: nil
+        )
     }
 
     private func restore(target: PasteTarget) -> Bool {
+        if let restoreHandler {
+            return restoreHandler(target)
+        }
         guard let pid = target.processIdentifier, pid > 0,
               let app = NSRunningApplication(processIdentifier: pid) else {
             return false
@@ -143,6 +254,9 @@ final class PasteService: PasteServiceProtocol, @unchecked Sendable {
     }
 
     private func performPasteEvent() -> Bool {
+        if let pasteEventHandler {
+            return pasteEventHandler()
+        }
         guard let source = CGEventSource(stateID: .hidSystemState),
               let keyDown = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: true),
               let keyUp = CGEvent(keyboardEventSource: source, virtualKey: 9, keyDown: false) else {
@@ -153,6 +267,75 @@ final class PasteService: PasteServiceProtocol, @unchecked Sendable {
         keyDown.post(tap: .cghidEventTap)
         keyUp.post(tap: .cghidEventTap)
         return true
+    }
+
+    private func finish(
+        result: PasteResult,
+        target: PasteTarget?,
+        requestedMode: PasteMode,
+        outcome: PasteInsertionOutcome,
+        fallbackReason: PasteFallbackReason?
+    ) -> PasteOperationResult {
+        PasteOperationResult(
+            result: result,
+            diagnostic: PasteInsertionDiagnostic(
+                requestedMode: requestedMode,
+                targetAppName: target?.appName,
+                targetWindowTitle: target?.windowTitle,
+                targetFieldRole: target?.focusedElementRole,
+                targetFieldTitle: target?.focusedElementTitle,
+                targetFieldPlaceholder: target?.focusedElementPlaceholder,
+                outcome: outcome,
+                fallbackReason: fallbackReason
+            )
+        )
+    }
+
+    private func targetMatchesCurrentContext(target: PasteTarget, current: ActiveAppContext) -> Bool {
+        guard let targetPID = target.processIdentifier, let currentPID = current.processIdentifier, targetPID == currentPID else {
+            return false
+        }
+        guard target.isEditableTextInput, target.isSecureTextInput == false else {
+            return false
+        }
+        guard current.editableRoleClass == target.editableRoleClass else {
+            return false
+        }
+
+        let windowMatches = normalized(current.windowTitle) == normalized(target.windowTitle)
+        let titleMatches = normalized(current.focusedElementTitle) == normalized(target.focusedElementTitle)
+        let placeholderMatches = normalized(current.focusedElementPlaceholder) == normalized(target.focusedElementPlaceholder)
+        let descriptionMatches = normalized(current.focusedElementDescription) == normalized(target.focusedElementDescription)
+        let snippetMatches = snippetMatch(current.focusedValueSnippet, target.focusedValueSnippet)
+
+        let hasTargetIdentity = [target.windowTitle, target.focusedElementTitle, target.focusedElementPlaceholder, target.focusedElementDescription]
+            .contains { normalized($0) != nil }
+
+        if titleMatches || placeholderMatches || descriptionMatches {
+            return true
+        }
+        if windowMatches && snippetMatches {
+            return true
+        }
+        if windowMatches && hasTargetIdentity == false {
+            return true
+        }
+        return false
+    }
+
+    private func normalized(_ text: String?) -> String? {
+        guard let text else { return nil }
+        let normalized = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        return normalized.isEmpty ? nil : normalized
+    }
+
+    private func snippetMatch(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard let lhs = normalized(lhs), let rhs = normalized(rhs) else { return false }
+        let leftPrefix = String(lhs.prefix(24))
+        let rightPrefix = String(rhs.prefix(24))
+        return leftPrefix == rightPrefix
     }
 }
 
@@ -377,57 +560,341 @@ final class StatusItemController: NSObject {
     }
 }
 
+enum HotkeyBackend: String, Codable, Sendable {
+    case eventMonitor
+    case functionKeySpecialCase
+    case fallback
+    case unavailable
+}
+
+struct ShellFallbackStatus: Equatable, Sendable {
+    let used: Bool
+    let reason: String?
+    let suggestedBinding: HotkeyBinding?
+}
+
+struct ShellBindingResolution: Sendable {
+    let backend: HotkeyBackend
+    let effectiveBinding: HotkeyBinding
+    let originalBinding: HotkeyBinding
+    let fallback: ShellFallbackStatus
+    let message: String?
+    let recommendedFallback: HotkeyBinding?
+    let permissionGranted: Bool
+    let isActive: Bool
+
+    var fallbackWasUsed: Bool { fallback.used }
+}
+
+typealias HotkeyStartResult = ShellBindingResolution
+
+@MainActor
+final class FunctionKeyHotkeyBackend {
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+    private var handler: ((InputEvent) -> Void)?
+    private var isPressed = false
+
+    func start(binding: HotkeyBinding, handler: @escaping (InputEvent) -> Void) -> Bool {
+        stop()
+        guard binding.isFunctionOnlyBinding else { return false }
+        self.handler = handler
+        isPressed = false
+
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
+            guard let self else { return event }
+            guard let inputEvent = self.matchingFunctionEvent(for: event, binding: binding) else { return event }
+            self.handler?(inputEvent)
+            return nil
+        }
+
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.flagsChanged]) { [weak self] event in
+            guard let self else { return }
+            guard let inputEvent = self.matchingFunctionEvent(for: event, binding: binding) else { return }
+            self.handler?(inputEvent)
+        }
+
+        return localMonitor != nil || globalMonitor != nil
+    }
+
+    func stop() {
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
+        }
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
+            self.globalMonitor = nil
+        }
+        handler = nil
+        isPressed = false
+    }
+
+    private func matchingFunctionEvent(for event: NSEvent, binding: HotkeyBinding) -> InputEvent? {
+        guard event.type == .flagsChanged else { return nil }
+        guard UInt16(event.keyCode) == binding.keyCode else { return nil }
+        guard let modifierKeyRawValue = binding.modifierKeyRawValue else { return nil }
+        let active = event.modifierFlags.rawValue & HotkeyBinding.relevantModifierMask
+        let activeWithoutPrimary = active & ~modifierKeyRawValue
+        guard activeWithoutPrimary == binding.modifierFlagsRawValue else { return nil }
+        let pressed = active & modifierKeyRawValue != 0
+        if pressed == isPressed { return nil }
+        isPressed = pressed
+        return pressed ? .triggerDown : .triggerUp
+    }
+}
+
 @MainActor
 final class HotkeyManager {
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandler: EventHandlerRef?
-    private var onTrigger: (() -> Void)?
+    private var localMonitor: Any?
+    private var globalMonitor: Any?
+    private var activeBinding: HotkeyBinding?
+    private var handler: ((InputEvent) -> Void)?
+    private let eventMonitorStarter: ((HotkeyBinding, @escaping (InputEvent) -> Void) -> Bool)?
+    private let functionKeyBackendStarter: ((HotkeyBinding, @escaping (InputEvent) -> Void) -> Bool)?
+    private let functionKeyBackend = FunctionKeyHotkeyBackend()
 
-    func register(shortcut: KeyboardShortcut, onTrigger: @escaping () -> Void) {
+    init(
+        eventMonitorStarter: ((HotkeyBinding, @escaping (InputEvent) -> Void) -> Bool)? = nil,
+        functionKeyBackendStarter: ((HotkeyBinding, @escaping (InputEvent) -> Void) -> Bool)? = nil
+    ) {
+        self.eventMonitorStarter = eventMonitorStarter
+        self.functionKeyBackendStarter = functionKeyBackendStarter
+    }
+
+    func register(
+        binding: HotkeyBinding,
+        fallbackMode: FunctionKeyFallbackMode,
+        fallbackCandidates: [HotkeyBinding],
+        onEvent: @escaping (InputEvent) -> Void
+    ) -> HotkeyStartResult {
         unregister()
-        guard shortcut.isEmpty == false else { return }
-        self.onTrigger = onTrigger
-        verbatimHotkeyCallback = onTrigger
 
-        let hotKeyID = EventHotKeyID(signature: OSType(0x56524254), id: 1)
-        let status = RegisterEventHotKey(
-            shortcut.keyCode,
-            shortcut.modifiers,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
+        let permissionGranted = AXIsProcessTrusted()
+        let validation = binding.validationResult
+        guard validation.isValid else {
+            return HotkeyStartResult(
+                backend: .unavailable,
+                effectiveBinding: binding,
+                originalBinding: binding,
+                fallback: ShellFallbackStatus(used: false, reason: nil, suggestedBinding: recommendedFallback(for: binding, candidates: fallbackCandidates)),
+                message: validation.blockingMessage,
+                recommendedFallback: recommendedFallback(for: binding, candidates: fallbackCandidates),
+                permissionGranted: permissionGranted,
+                isActive: false
+            )
+        }
 
-        guard status == noErr else { return }
+        guard permissionGranted else {
+            return HotkeyStartResult(
+                backend: .unavailable,
+                effectiveBinding: binding,
+                originalBinding: binding,
+                fallback: ShellFallbackStatus(used: false, reason: nil, suggestedBinding: recommendedFallback(for: binding, candidates: fallbackCandidates)),
+                message: "Accessibility permission is required for global hotkeys.",
+                recommendedFallback: recommendedFallback(for: binding, candidates: fallbackCandidates),
+                permissionGranted: false,
+                isActive: false
+            )
+        }
 
-        var eventSpec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { _, _, _ in
-                DispatchQueue.main.async {
-                    verbatimHotkeyCallback?()
+        let recommendedFallback = recommendedFallback(for: binding, candidates: fallbackCandidates)
+
+        if binding.isFunctionOnlyBinding {
+            if startFunctionKeyBackend(binding: binding, handler: onEvent) {
+                return HotkeyStartResult(
+                    backend: .functionKeySpecialCase,
+                    effectiveBinding: binding,
+                    originalBinding: binding,
+                    fallback: ShellFallbackStatus(used: false, reason: nil, suggestedBinding: recommendedFallback),
+                    message: "Fn / Globe monitoring is active.",
+                    recommendedFallback: recommendedFallback,
+                    permissionGranted: true,
+                    isActive: true
+                )
+            }
+
+            switch fallbackMode {
+            case .automatic:
+                if let fallback = firstAvailableFallback(candidates: fallbackCandidates, handler: onEvent) {
+                    return HotkeyStartResult(
+                        backend: .fallback,
+                        effectiveBinding: fallback,
+                        originalBinding: binding,
+                        fallback: ShellFallbackStatus(used: true, reason: "Fn / Globe could not be activated globally. Using \(fallback.displayTitle) instead.", suggestedBinding: fallback),
+                        message: "Fn / Globe could not be activated globally. Using \(fallback.displayTitle) instead.",
+                        recommendedFallback: fallback,
+                        permissionGranted: true,
+                        isActive: true
+                    )
                 }
-                return noErr
-            },
-            1,
-            &eventSpec,
-            nil,
-            &eventHandler
+            case .ask:
+                if startEventMonitorBackend(binding: binding, handler: onEvent) {
+                    return HotkeyStartResult(
+                        backend: .eventMonitor,
+                        effectiveBinding: binding,
+                        originalBinding: binding,
+                        fallback: ShellFallbackStatus(used: false, reason: "Fn / Globe may not work globally. Recommended fallback: \(recommendedFallback?.displayTitle ?? "none").", suggestedBinding: recommendedFallback),
+                        message: "Fn / Globe may not work globally. Recommended fallback: \(recommendedFallback?.displayTitle ?? "none").",
+                        recommendedFallback: recommendedFallback,
+                        permissionGranted: true,
+                        isActive: true
+                    )
+                }
+            case .disabled:
+                if startEventMonitorBackend(binding: binding, handler: onEvent) {
+                    return HotkeyStartResult(
+                        backend: .eventMonitor,
+                        effectiveBinding: binding,
+                        originalBinding: binding,
+                        fallback: ShellFallbackStatus(used: false, reason: "Fn / Globe may not work globally outside the app.", suggestedBinding: recommendedFallback),
+                        message: "Fn / Globe may not work globally outside the app.",
+                        recommendedFallback: recommendedFallback,
+                        permissionGranted: true,
+                        isActive: true
+                    )
+                }
+            }
+
+            return HotkeyStartResult(
+                backend: .unavailable,
+                effectiveBinding: binding,
+                originalBinding: binding,
+                fallback: ShellFallbackStatus(used: false, reason: nil, suggestedBinding: recommendedFallback),
+                message: "No global hotkey could be activated.",
+                recommendedFallback: recommendedFallback,
+                permissionGranted: true,
+                isActive: false
+            )
+        }
+
+        if startEventMonitorBackend(binding: binding, handler: onEvent) {
+            return HotkeyStartResult(
+                backend: .eventMonitor,
+                effectiveBinding: binding,
+                originalBinding: binding,
+                fallback: ShellFallbackStatus(used: false, reason: nil, suggestedBinding: recommendedFallback),
+                message: "Hotkey active: \(binding.displayTitle)",
+                recommendedFallback: recommendedFallback,
+                permissionGranted: true,
+                isActive: true
+            )
+        }
+
+        return HotkeyStartResult(
+            backend: .unavailable,
+            effectiveBinding: binding,
+            originalBinding: binding,
+            fallback: ShellFallbackStatus(used: false, reason: nil, suggestedBinding: recommendedFallback),
+            message: "No global hotkey could be activated.",
+            recommendedFallback: recommendedFallback,
+            permissionGranted: true,
+            isActive: false
         )
     }
 
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
+        functionKeyBackend.stop()
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+            self.localMonitor = nil
         }
-        if let eventHandler {
-            RemoveEventHandler(eventHandler)
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
+            self.globalMonitor = nil
         }
-        hotKeyRef = nil
-        eventHandler = nil
-        onTrigger = nil
-        verbatimHotkeyCallback = nil
+        activeBinding = nil
+        handler = nil
+    }
+
+    private func startEventMonitorBackend(
+        binding: HotkeyBinding,
+        handler: @escaping (InputEvent) -> Void
+    ) -> Bool {
+        if let eventMonitorStarter {
+            let started = eventMonitorStarter(binding, handler)
+            if started {
+                activeBinding = binding
+                self.handler = handler
+            }
+            return started
+        }
+
+        activeBinding = binding
+        self.handler = handler
+
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
+            guard let self else { return event }
+            guard let inputEvent = self.matchingInputEvent(for: event, binding: binding) else { return event }
+            self.handler?(inputEvent)
+            return nil
+        }
+
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
+            guard let self else { return }
+            guard let inputEvent = self.matchingInputEvent(for: event, binding: binding) else { return }
+            self.handler?(inputEvent)
+        }
+
+        return localMonitor != nil || globalMonitor != nil
+    }
+
+    private func startFunctionKeyBackend(
+        binding: HotkeyBinding,
+        handler: @escaping (InputEvent) -> Void
+    ) -> Bool {
+        if let functionKeyBackendStarter {
+            let started = functionKeyBackendStarter(binding, handler)
+            if started {
+                activeBinding = binding
+                self.handler = handler
+            }
+            return started
+        }
+        let started = functionKeyBackend.start(binding: binding, handler: handler)
+        if started {
+            activeBinding = binding
+            self.handler = handler
+        }
+        return started
+    }
+
+    private func firstAvailableFallback(candidates: [HotkeyBinding], handler: @escaping (InputEvent) -> Void) -> HotkeyBinding? {
+        for fallback in candidates {
+            if startEventMonitorBackend(binding: fallback, handler: handler) {
+                return fallback
+            }
+        }
+        return nil
+    }
+
+    private func recommendedFallback(for binding: HotkeyBinding, candidates: [HotkeyBinding]) -> HotkeyBinding? {
+        candidates.first { $0 != binding }
+    }
+
+    private func matchingInputEvent(for event: NSEvent, binding: HotkeyBinding) -> InputEvent? {
+        guard UInt16(event.keyCode) == binding.keyCode else { return nil }
+
+        switch event.type {
+        case .keyDown, .keyUp:
+            guard binding.modifierKeyRawValue == nil else { return nil }
+            if event.type == .keyDown, event.isARepeat {
+                return nil
+            }
+            let required = binding.modifierFlagsRawValue & HotkeyBinding.relevantModifierMask
+            let active = event.modifierFlags.rawValue & HotkeyBinding.relevantModifierMask
+            guard active == required else { return nil }
+            return event.type == .keyDown ? .triggerDown : .triggerUp
+        case .flagsChanged:
+            guard let modifierKeyRawValue = binding.modifierKeyRawValue else { return nil }
+            let active = event.modifierFlags.rawValue & HotkeyBinding.relevantModifierMask
+            let activeWithoutPrimary = active & ~modifierKeyRawValue
+            guard activeWithoutPrimary == binding.modifierFlagsRawValue else { return nil }
+            let isPressed = active & modifierKeyRawValue != 0
+            return isPressed ? .triggerDown : .triggerUp
+        default:
+            return nil
+        }
     }
 }
 
@@ -471,5 +938,34 @@ extension KeyboardShortcut {
             16: "Y", 6: "Z"
         ]
         return table[keyCode] ?? "Key \(keyCode)"
+    }
+}
+
+extension HotkeyBinding {
+    static func from(event: NSEvent) -> HotkeyBinding? {
+        switch event.type {
+        case .flagsChanged:
+            let modifiers = event.modifierFlags.intersection([.function])
+            guard modifiers.contains(.function) else { return nil }
+            return .defaultFunctionKey
+        case .keyDown:
+            let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+            guard modifiers.isEmpty == false else { return nil }
+
+            var flags: UInt = 0
+            if modifiers.contains(.command) { flags |= commandModifierRawValue }
+            if modifiers.contains(.option) { flags |= optionModifierRawValue }
+            if modifiers.contains(.control) { flags |= controlModifierRawValue }
+            if modifiers.contains(.shift) { flags |= shiftModifierRawValue }
+
+            return HotkeyBinding(
+                keyCode: UInt16(event.keyCode),
+                modifierFlagsRawValue: flags,
+                keyDisplay: keyDisplay(for: UInt16(event.keyCode)),
+                modifierKeyRawValue: nil
+            )
+        default:
+            return nil
+        }
     }
 }

@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/verbatim_core_ffi"]
+resolver = "2"
