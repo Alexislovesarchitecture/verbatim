@@ -150,6 +150,194 @@ struct ProviderReadiness: Equatable, Sendable {
     static let ready = ProviderReadiness(kind: .ready, message: "Ready.", actionTitle: nil)
 }
 
+enum OperatingSystemFamily: String, CaseIterable, Codable, Sendable {
+    case macOS = "macos"
+    case windows
+
+    var title: String {
+        switch self {
+        case .macOS:
+            return "macOS"
+        case .windows:
+            return "Windows"
+        }
+    }
+}
+
+enum CPUArchitecture: String, CaseIterable, Codable, Sendable {
+    case arm64
+    case x86_64
+
+    var title: String {
+        rawValue
+    }
+}
+
+enum AcceleratorClass: String, CaseIterable, Codable, Sendable {
+    case none
+    case appleSilicon = "apple_silicon"
+    case nvidiaCUDA = "nvidia_cuda"
+
+    var title: String {
+        switch self {
+        case .none:
+            return "None"
+        case .appleSilicon:
+            return "Apple Silicon"
+        case .nvidiaCUDA:
+            return "NVIDIA CUDA"
+        }
+    }
+}
+
+struct SystemVersionInfo: Equatable, Codable, Sendable {
+    var major: Int
+    var minor: Int
+    var patch: Int
+
+    var title: String {
+        "\(major).\(minor).\(patch)"
+    }
+}
+
+struct SystemProfile: Equatable, Codable, Sendable {
+    var osFamily: OperatingSystemFamily
+    var osVersion: SystemVersionInfo
+    var architecture: CPUArchitecture
+    var accelerator: AcceleratorClass
+
+    static var current: SystemProfile {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        #if os(macOS)
+        let osFamily: OperatingSystemFamily = .macOS
+        #elseif os(Windows)
+        let osFamily: OperatingSystemFamily = .windows
+        #else
+        let osFamily: OperatingSystemFamily = .macOS
+        #endif
+
+        #if arch(arm64)
+        let architecture: CPUArchitecture = .arm64
+        let accelerator: AcceleratorClass = .appleSilicon
+        #elseif arch(x86_64)
+        let architecture: CPUArchitecture = .x86_64
+        let accelerator: AcceleratorClass = .none
+        #else
+        let architecture: CPUArchitecture = .x86_64
+        let accelerator: AcceleratorClass = .none
+        #endif
+
+        return SystemProfile(
+            osFamily: osFamily,
+            osVersion: SystemVersionInfo(major: version.majorVersion, minor: version.minorVersion, patch: version.patchVersion),
+            architecture: architecture,
+            accelerator: accelerator
+        )
+    }
+
+    var summary: String {
+        "\(osFamily.title) \(osVersion.title) • \(architecture.title) • \(accelerator.title)"
+    }
+}
+
+struct CapabilityRequirement: Equatable, Codable, Sendable {
+    var allowedOSFamilies: [OperatingSystemFamily]
+    var allowedArchitectures: [CPUArchitecture]
+    var requiredAccelerators: [AcceleratorClass]
+
+    func supports(_ profile: SystemProfile) -> Bool {
+        let osSupported = allowedOSFamilies.isEmpty || allowedOSFamilies.contains(profile.osFamily)
+        let architectureSupported = allowedArchitectures.isEmpty || allowedArchitectures.contains(profile.architecture)
+        let acceleratorSupported = requiredAccelerators.isEmpty || requiredAccelerators.contains(profile.accelerator)
+        return osSupported && architectureSupported && acceleratorSupported
+    }
+}
+
+enum CapabilityStatusKind: String, Codable, Sendable {
+    case available
+    case unsupported
+    case supportedButNotReady = "supported_but_not_ready"
+
+    var title: String {
+        switch self {
+        case .available:
+            return "Available"
+        case .unsupported:
+            return "Unsupported"
+        case .supportedButNotReady:
+            return "Needs Setup"
+        }
+    }
+}
+
+struct CapabilityStatus: Equatable, Codable, Sendable {
+    var kind: CapabilityStatusKind
+    var reason: String?
+    var actionTitle: String?
+
+    static let available = CapabilityStatus(kind: .available, reason: nil, actionTitle: nil)
+
+    var isAvailable: Bool {
+        kind == .available
+    }
+
+    var isSupported: Bool {
+        kind != .unsupported
+    }
+
+    var supportsSetupAction: Bool {
+        kind == .supportedButNotReady && actionTitle != nil
+    }
+
+    var detail: String {
+        reason ?? kind.title
+    }
+}
+
+struct ProviderCapabilityDescriptor: Equatable, Codable, Sendable {
+    var provider: ProviderID
+    var title: String
+    var requirements: CapabilityRequirement
+    var unsupportedReason: String
+}
+
+enum FeatureID: String, CaseIterable, Identifiable, Codable, Sendable {
+    case providerSelection = "provider_selection"
+    case autoPaste = "auto_paste"
+    case hotkeyCapture = "hotkey_capture"
+    case modelManagement = "model_management"
+    case appleSpeechAssets = "apple_speech_assets"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .providerSelection:
+            return "Provider Selection"
+        case .autoPaste:
+            return "Auto-paste"
+        case .hotkeyCapture:
+            return "Hotkey Capture"
+        case .modelManagement:
+            return "Model Management"
+        case .appleSpeechAssets:
+            return "Apple Speech Assets"
+        }
+    }
+}
+
+struct FeatureCapabilityDescriptor: Equatable, Codable, Sendable {
+    var feature: FeatureID
+    var title: String
+    var requirements: CapabilityRequirement
+    var unsupportedReason: String
+}
+
+struct CapabilityManifest: Equatable, Codable, Sendable {
+    var providers: [ProviderCapabilityDescriptor]
+    var features: [FeatureCapabilityDescriptor]
+}
+
 struct DictionaryEntry: Identifiable, Equatable, Codable, Sendable {
     var id: UUID
     var phrase: String
@@ -337,6 +525,7 @@ struct RuntimeHealthSnapshot: Equatable, Sendable {
 
 struct ProviderDiagnosticStatus: Identifiable, Equatable, Sendable {
     var provider: ProviderID
+    var capability: CapabilityStatus
     var availability: ProviderAvailability
     var readiness: ProviderReadiness
     var selectionDescription: String

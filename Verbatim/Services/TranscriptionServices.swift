@@ -1257,27 +1257,32 @@ final class TranscriptionCoordinator {
         self.providers = providers
     }
 
-    func startRecording() async throws {
+    func startRecording(provider providerID: ProviderID) async throws {
         currentTarget = pasteService.captureTarget()
-        transcriptionLogger.info("Starting recording for provider \(self.settingsStore.settings.selectedProvider.rawValue, privacy: .public)")
-        logStore.append("Starting recording for provider \(self.settingsStore.settings.selectedProvider.rawValue)", category: .transcription)
+        transcriptionLogger.info("Starting recording for provider \(providerID.rawValue, privacy: .public)")
+        logStore.append("Starting recording for provider \(providerID.rawValue)", category: .transcription)
         try await recordingManager.startRecording()
     }
 
-    func stopRecordingAndTranscribe(dictionaryEntries: [DictionaryEntry], accessibilityGranted: Bool) async throws -> CoordinatorOutcome {
+    func stopRecordingAndTranscribe(
+        provider providerID: ProviderID,
+        language: LanguageSelection,
+        dictionaryEntries: [DictionaryEntry],
+        accessibilityGranted: Bool
+    ) async throws -> CoordinatorOutcome {
         let settings = settingsStore.settings
         let rawAudioURL = try await recordingManager.stopRecording()
         let normalizedURL = try await normalizer.normalizeAudioFile(at: rawAudioURL)
-        guard let provider = providers[settings.selectedProvider] else {
+        guard let provider = providers[providerID] else {
             throw VerbatimTranscriptionError.providerUnavailable("No provider is configured.")
         }
 
         do {
-            transcriptionLogger.info("Transcription request started for provider \(settings.selectedProvider.rawValue, privacy: .public)")
-            logStore.append("Transcription request started for provider \(settings.selectedProvider.rawValue)", category: .transcription)
+            transcriptionLogger.info("Transcription request started for provider \(providerID.rawValue, privacy: .public)")
+            logStore.append("Transcription request started for provider \(providerID.rawValue)", category: .transcription)
             let result = try await provider.transcribe(
                 audioFileURL: normalizedURL,
-                language: settings.preferredLanguage,
+                language: language,
                 dictionaryHints: dictionaryEntries
             )
             let pasteResult = pasteService.paste(
@@ -1297,11 +1302,11 @@ final class TranscriptionCoordinator {
             logStore.append("Transcription request finished for provider \(result.provider.rawValue)", category: .transcription)
             return CoordinatorOutcome(result: result, pasteResult: pasteResult, historyItem: historyItem)
         } catch {
-            transcriptionLogger.error("Transcription request failed for provider \(settings.selectedProvider.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
-            logStore.append("Transcription request failed for provider \(settings.selectedProvider.rawValue): \(error.localizedDescription)", category: .transcription)
+            transcriptionLogger.error("Transcription request failed for provider \(providerID.rawValue, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            logStore.append("Transcription request failed for provider \(providerID.rawValue): \(error.localizedDescription)", category: .transcription)
             let historyItem = historyStore.save(
-                provider: settings.selectedProvider,
-                language: settings.preferredLanguage,
+                provider: providerID,
+                language: language,
                 originalText: "",
                 finalText: "",
                 error: error.localizedDescription

@@ -98,15 +98,13 @@ struct AppRootView: View {
                         subtitle: "Choose the local transcription engine Verbatim should use.",
                         actionTitle: nil
                     ) {
-                        Picker("", selection: Binding(
-                            get: { model.settings.selectedProvider },
-                            set: { model.settings.selectedProvider = $0 }
-                        )) {
-                            ForEach(providerOrder) { provider in
-                                Text(provider.title).tag(provider)
-                            }
+                        providerSelectionButtons
+
+                        if let message = model.effectiveProviderMessage {
+                            Text(message)
+                                .font(.system(size: 13, weight: .medium, design: .rounded))
+                                .foregroundStyle(AppSectionAccent.amber.tint)
                         }
-                        .pickerStyle(.segmented)
                     }
 
                     onboardingCard(
@@ -774,6 +772,13 @@ struct AppRootView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
+                .disabled(model.featureCapability(for: .autoPaste).isSupported == false)
+
+                if model.featureCapability(for: .autoPaste).isSupported == false {
+                    Text(model.featureCapability(for: .autoPaste).detail)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(AppSectionAccent.amber.tint)
+                }
 
                 Toggle("Show menu bar item", isOn: Binding(
                     get: { model.settings.menuBarEnabled },
@@ -811,25 +816,12 @@ struct AppRootView: View {
     private var transcriptionPanel: some View {
         VerbatimGlassGroup(spacing: Layout.sectionSpacing) {
             settingsCard("Speech to Text") {
-                HStack(spacing: 8) {
-                    ForEach(providerOrder) { provider in
-                        Button {
-                            model.settings.selectedProvider = provider
-                        } label: {
-                            HStack(spacing: 8) {
-                                Image(systemName: providerSystemImage(provider))
-                                    .font(.system(size: 13, weight: .semibold))
-                                Text(provider.title)
-                                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-                            }
-                            .foregroundStyle(model.settings.selectedProvider == provider ? AppSectionAccent.cobalt.tint : VerbatimPalette.ink)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .frame(maxWidth: .infinity)
-                            .applySelectionPillStyle(selected: model.settings.selectedProvider == provider, accent: .cobalt, cornerRadius: 16)
-                        }
-                        .buttonStyle(.plain)
-                    }
+                providerSelectionButtons
+
+                if let message = model.effectiveProviderMessage {
+                    Text(message)
+                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                        .foregroundStyle(AppSectionAccent.amber.tint)
                 }
 
                 providerSettingsContent
@@ -865,53 +857,63 @@ struct AppRootView: View {
         switch model.settings.selectedProvider {
         case .whisper:
             providerStatusHeader(for: .whisper)
-            ForEach(model.whisperModelStatuses) { status in
-                modelRow(
-                    status,
-                    selected: model.settings.selectedWhisperModelID == status.id,
-                    onSelect: { model.settings.selectedWhisperModelID = status.id },
-                    onDownload: { Task { await model.downloadWhisperModel(status.id) } },
-                    onDelete: { Task { await model.deleteWhisperModel(status.id) } }
-                )
+            if model.providerCapability(for: .whisper).isSupported {
+                ForEach(model.whisperModelStatuses) { status in
+                    modelRow(
+                        status,
+                        selected: model.settings.selectedWhisperModelID == status.id,
+                        onSelect: { model.settings.selectedWhisperModelID = status.id },
+                        onDownload: { Task { await model.downloadWhisperModel(status.id) } },
+                        onDelete: { Task { await model.deleteWhisperModel(status.id) } }
+                    )
+                }
             }
         case .parakeet:
             providerStatusHeader(for: .parakeet)
-            ForEach(model.parakeetModelStatuses) { status in
-                modelRow(
-                    status,
-                    selected: model.settings.selectedParakeetModelID == status.id,
-                    onSelect: { model.settings.selectedParakeetModelID = status.id },
-                    onDownload: { Task { await model.downloadParakeetModel(status.id) } },
-                    onDelete: { Task { await model.deleteParakeetModel(status.id) } }
-                )
+            if model.providerCapability(for: .parakeet).isSupported {
+                ForEach(model.parakeetModelStatuses) { status in
+                    modelRow(
+                        status,
+                        selected: model.settings.selectedParakeetModelID == status.id,
+                        onSelect: { model.settings.selectedParakeetModelID = status.id },
+                        onDownload: { Task { await model.downloadParakeetModel(status.id) } },
+                        onDelete: { Task { await model.deleteParakeetModel(status.id) } }
+                    )
+                }
             }
         case .appleSpeech:
             providerStatusHeader(for: .appleSpeech)
-            if model.providerStatus(for: .appleSpeech).actionTitle == "Install" {
+            if model.providerCapability(for: .appleSpeech).isSupported,
+               model.providerStatus(for: .appleSpeech).actionTitle == "Install" {
                 Button("Install Apple Speech Assets") {
                     Task { await model.installAppleAssets() }
                 }
                 .applyGlassButtonStyle(prominent: true)
             }
-            Text("\(model.appleInstalledLanguages.count) Apple speech languages are currently installed on this Mac.")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.mutedInk)
+            if model.providerCapability(for: .appleSpeech).isSupported {
+                Text("\(model.appleInstalledLanguages.count) Apple speech languages are currently installed on this Mac.")
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(VerbatimPalette.mutedInk)
+            }
         }
     }
 
     private func providerStatusHeader(for provider: ProviderID) -> some View {
+        let capability = model.providerCapability(for: provider)
+        let statusMessage = capability.kind == .unsupported ? capability.detail : model.providerStatus(for: provider).message
+
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Text(provider.title)
                     .font(.system(size: 17, weight: .semibold, design: .rounded))
 
-                Text(model.providerStatus(for: provider).kind == .ready ? "Ready" : "Needs Attention")
+                Text(capability.kind.title)
                     .font(.system(size: 11, weight: .semibold, design: .rounded))
-                    .foregroundStyle(model.providerStatus(for: provider).kind == .ready ? AppSectionAccent.mint.tint : AppSectionAccent.amber.tint)
+                    .foregroundStyle(capability.isAvailable ? AppSectionAccent.mint.tint : AppSectionAccent.amber.tint)
                     .applyStatusBadgeEffect()
             }
 
-            Text(model.providerStatus(for: provider).message)
+            Text(statusMessage)
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(VerbatimPalette.mutedInk)
         }
@@ -948,10 +950,44 @@ struct AppRootView: View {
                 }
                 .applyGlassButtonStyle()
             }
+            .disabled(model.featureCapability(for: .hotkeyCapture).isSupported == false)
 
             Text("Current shortcut: \(model.settings.hotkey.displayTitle)")
                 .font(.system(size: 13, weight: .medium, design: .rounded))
                 .foregroundStyle(VerbatimPalette.mutedInk)
+
+            if model.featureCapability(for: .hotkeyCapture).isSupported == false {
+                Text(model.featureCapability(for: .hotkeyCapture).detail)
+                    .font(.system(size: 13, weight: .medium, design: .rounded))
+                    .foregroundStyle(AppSectionAccent.amber.tint)
+            }
+        }
+    }
+
+    private var providerSelectionButtons: some View {
+        HStack(spacing: 8) {
+            ForEach(providerOrder) { provider in
+                let capability = model.providerCapability(for: provider)
+
+                Button {
+                    model.selectProvider(provider)
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: providerSystemImage(provider))
+                            .font(.system(size: 13, weight: .semibold))
+                        Text(provider.title)
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    }
+                    .foregroundStyle(model.settings.selectedProvider == provider ? AppSectionAccent.cobalt.tint : VerbatimPalette.ink)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .opacity(capability.isSupported ? 1 : 0.62)
+                    .applySelectionPillStyle(selected: model.settings.selectedProvider == provider, accent: .cobalt, cornerRadius: 16)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.canSelectProvider(provider) == false)
+            }
         }
     }
 

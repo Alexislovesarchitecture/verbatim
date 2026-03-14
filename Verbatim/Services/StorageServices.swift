@@ -9,6 +9,11 @@ private struct ModelManifestEnvelope: Codable {
     var models: [ModelDescriptor]
 }
 
+private struct CapabilityManifestEnvelope: Codable {
+    var providers: [ProviderCapabilityDescriptor]
+    var features: [FeatureCapabilityDescriptor]
+}
+
 enum ModelManifestRepository {
     static func load() -> [ModelDescriptor] {
         guard let url = VerbatimBundle.current.url(forResource: "ModelManifest", withExtension: "json"),
@@ -17,6 +22,21 @@ enum ModelManifestRepository {
             return []
         }
         return envelope.models
+    }
+}
+
+enum CapabilityManifestRepository {
+    static func load() -> CapabilityManifest {
+        guard let url = VerbatimBundle.current.url(forResource: "CapabilityManifest", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let envelope = try? JSONDecoder().decode(CapabilityManifestEnvelope.self, from: data) else {
+            return CapabilityManifest(providers: [], features: [])
+        }
+
+        return CapabilityManifest(
+            providers: envelope.providers,
+            features: envelope.features
+        )
     }
 }
 

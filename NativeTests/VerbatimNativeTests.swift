@@ -270,8 +270,13 @@ final class VerbatimNativeTests: XCTestCase {
             ]
         )
 
-        try await coordinator.startRecording()
-        let outcome = try await coordinator.stopRecordingAndTranscribe(dictionaryEntries: [], accessibilityGranted: false)
+        try await coordinator.startRecording(provider: .parakeet)
+        let outcome = try await coordinator.stopRecordingAndTranscribe(
+            provider: .parakeet,
+            language: .init(identifier: "en"),
+            dictionaryEntries: [],
+            accessibilityGranted: false
+        )
 
         XCTAssertEqual(outcome.result.provider, .parakeet)
         XCTAssertEqual(outcome.pasteResult, .copiedOnly("Copied to clipboard. Enable Accessibility for auto-paste."))

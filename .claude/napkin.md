@@ -105,3 +105,4 @@
 - Current task: add Apple-style Liquid Glass visual enhancements while preserving current functionality.
 - Model selection now uses `TranscriptionModel` and is persisted in user defaults.
 - Source tree currently contains duplicate backup Swift files with numeric suffixes (excluded in `Package.swift`); avoid editing those and keep architectural changes in canonical files.
+| 2026-03-13 | self | A capability-based coordinator refactor initially captured `self` inside `AppModel.init` before stored properties were fully initialized | When adding runtime resolver callbacks from `AppModel`, pass effective values at call time or set callbacks after initialization instead of capturing `self` during init |

@@ -59,6 +59,9 @@ final class AppModel: ObservableObject {
     @Published var dictionaryEntries: [DictionaryEntry] = []
     @Published var whisperModelStatuses: [ModelStatus] = []
     @Published var parakeetModelStatuses: [ModelStatus] = []
+    @Published var systemProfile: SystemProfile
+    @Published var providerCapabilities: [ProviderID: CapabilityStatus] = [:]
+    @Published var featureCapabilities: [FeatureID: CapabilityStatus] = [:]
     @Published var providerAvailability: [ProviderID: ProviderAvailability] = [:]
     @Published var providerReadiness: [ProviderID: ProviderReadiness] = [:]
     @Published var providerDiagnostics: [ProviderDiagnosticStatus] = []
@@ -80,10 +83,12 @@ final class AppModel: ObservableObject {
     private let parakeetModelManager: ParakeetModelManager
     private let whisperRuntimeManager: WhisperRuntimeManager
     private let parakeetRuntimeManager: ParakeetRuntimeManager
+    private let capabilityMatrix: CapabilityMatrix
     private let appleProvider: AppleSpeechProvider
     private let whisperProvider: WhisperProvider
     private let parakeetProvider: ParakeetProvider
     private let coordinator: TranscriptionCoordinator
+    private let providerFallbackOrder: [ProviderID] = [.whisper, .appleSpeech, .parakeet]
 
     init() {
         let paths = VerbatimPaths()
@@ -93,6 +98,7 @@ final class AppModel: ObservableObject {
         self.settings = settingsStore.settings
         self.selectedAppTab = settingsStore.settings.lastAppTab
         self.selectedSettingsTab = settingsStore.settings.lastSettingsTab
+        self.systemProfile = .current
         let historyStore = HistoryStore(paths: paths)
         self.historyStore = historyStore
         self.permissionsManager = PermissionsManager()
@@ -101,6 +107,7 @@ final class AppModel: ObservableObject {
         self.hotkeyManager = HotkeyManager()
         let logStore = VerbatimLogStore(paths: paths)
         self.logStore = logStore
+        self.capabilityMatrix = CapabilityMatrix(manifest: CapabilityManifestRepository.load())
 
         let descriptors = ModelManifestRepository.load()
         self.whisperModelManager = WhisperModelManager(descriptors: descriptors, paths: paths, logStore: logStore)
@@ -195,7 +202,7 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            try await coordinator.startRecording()
+            try await coordinator.startRecording(provider: effectiveProvider)
             applyOverlayStatus(.recording)
         } catch {
             applyOverlayStatus(.error(error.localizedDescription))
@@ -207,6 +214,8 @@ final class AppModel: ObservableObject {
         applyOverlayStatus(.processing)
         do {
             let outcome = try await coordinator.stopRecordingAndTranscribe(
+                provider: effectiveProvider,
+                language: effectiveLanguage,
                 dictionaryEntries: dictionaryEntries,
                 accessibilityGranted: permissionsManager.accessibilityAuthorized
             )
@@ -230,9 +239,14 @@ final class AppModel: ObservableObject {
     }
 
     func installAppleAssets() async {
+        guard featureCapability(for: .appleSpeechAssets).isSupported else {
+            transientMessage = featureCapability(for: .appleSpeechAssets).reason ?? "Apple Speech assets are unavailable on this system."
+            return
+        }
+
         do {
-            try await appleProvider.installAssets(for: settings.preferredLanguage)
-            logStore.append("Installed Apple Speech assets for \(settings.preferredLanguage.identifier)", category: .downloads)
+            try await appleProvider.installAssets(for: effectiveLanguageForProvider(.appleSpeech))
+            logStore.append("Installed Apple Speech assets for \(effectiveLanguageForProvider(.appleSpeech).identifier)", category: .downloads)
             await refreshProviderState()
         } catch {
             logStore.append("Failed Apple Speech asset install: \(error.localizedDescription)", category: .downloads)
@@ -425,6 +439,12 @@ final class AppModel: ObservableObject {
     }
 
     func restartRuntime(for provider: ProviderID) async {
+        let capability = providerCapability(for: provider)
+        guard capability.isSupported else {
+            transientMessage = capability.reason ?? "\(provider.title) is unavailable on this system."
+            return
+        }
+
         do {
             switch provider {
             case .whisper:
@@ -466,6 +486,30 @@ final class AppModel: ObservableObject {
         providerReadiness[provider] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil)
     }
 
+    func providerCapability(for provider: ProviderID) -> CapabilityStatus {
+        providerCapabilities[provider] ?? .available
+    }
+
+    func featureCapability(for feature: FeatureID) -> CapabilityStatus {
+        featureCapabilities[feature] ?? .available
+    }
+
+    func canSelectProvider(_ provider: ProviderID) -> Bool {
+        if providerCapabilities.isEmpty {
+            return true
+        }
+        let capability = providerCapability(for: provider)
+        return settings.selectedProvider == provider || capability.isAvailable || capability.supportsSetupAction
+    }
+
+    func selectProvider(_ provider: ProviderID) {
+        guard canSelectProvider(provider) else {
+            transientMessage = providerCapability(for: provider).reason ?? "\(provider.title) is unavailable on this system."
+            return
+        }
+        settings.selectedProvider = provider
+    }
+
     func availability(for provider: ProviderID) -> ProviderAvailability {
         providerAvailability[provider] ?? ProviderAvailability(isAvailable: false, reason: "Checking…")
     }
@@ -474,12 +518,31 @@ final class AppModel: ObservableObject {
         providerDiagnostics.first(where: { $0.provider == provider })
     }
 
+    var effectiveProvider: ProviderID {
+        capabilityMatrix.effectiveProvider(
+            storedProvider: settings.selectedProvider,
+            capabilities: providerCapabilities,
+            fallbackOrder: providerFallbackOrder
+        )
+    }
+
+    var effectiveLanguage: LanguageSelection {
+        effectiveLanguageForProvider(effectiveProvider)
+    }
+
+    var effectiveProviderMessage: String? {
+        guard effectiveProvider != settings.selectedProvider else { return nil }
+        let capability = providerCapability(for: settings.selectedProvider)
+        let detail = capability.reason ?? "\(settings.selectedProvider.title) is unavailable on this system."
+        return "\(detail) Verbatim will use \(effectiveProvider.title) while this preference is unavailable."
+    }
+
     var supportDiagnosticsSummary: String {
         diagnosticProviderOrder.compactMap { provider in
             guard let diagnostic = providerDiagnostic(for: provider) else { return nil }
             let runtimeState = diagnostic.runtimeSnapshot?.state.rawValue.capitalized ?? "System Managed"
             let readiness = diagnostic.readiness.kind == .ready ? "Ready" : diagnostic.readiness.message
-            return "\(provider.title): \(runtimeState) • \(readiness)"
+            return "\(provider.title): \(diagnostic.capability.kind.title) • \(runtimeState) • \(readiness)"
         }
         .joined(separator: "\n")
     }
@@ -498,6 +561,7 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshProviderState() async {
+        systemProfile = .current
         let providers: [ProviderID: any TranscriptionProvider] = [
             .appleSpeech: appleProvider,
             .whisper: whisperProvider,
@@ -505,16 +569,30 @@ final class AppModel: ObservableObject {
         ]
         var availability: [ProviderID: ProviderAvailability] = [:]
         var readiness: [ProviderID: ProviderReadiness] = [:]
+        var capabilities: [ProviderID: CapabilityStatus] = [:]
 
         for (providerID, provider) in providers {
             availability[providerID] = await provider.availability()
             readiness[providerID] = await provider.readiness(for: settings.preferredLanguage)
         }
+        for providerID in providers.keys {
+            capabilities[providerID] = capabilityMatrix.providerCapability(
+                for: providerID,
+                profile: systemProfile,
+                availability: availability[providerID] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
+                readiness: readiness[providerID] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil)
+            )
+        }
         let installedLanguages = await appleProvider.installedLanguages()
         appleInstalledLanguages = installedLanguages
         providerAvailability = availability
         providerReadiness = readiness
+        providerCapabilities = capabilities
+        featureCapabilities = Dictionary(uniqueKeysWithValues: FeatureID.allCases.map { feature in
+            (feature, capabilityMatrix.featureCapability(for: feature, profile: systemProfile))
+        })
         await refreshDiagnostics(
+            capabilities: capabilities,
             availability: availability,
             readiness: readiness,
             appleLanguages: installedLanguages
@@ -536,7 +614,7 @@ final class AppModel: ObservableObject {
     }
 
     private func updateStatusArtifacts() {
-        statusItemController.update(state: overlayStatus, providerName: settings.selectedProvider.title)
+        statusItemController.update(state: overlayStatus, providerName: effectiveProvider.title)
     }
 
     private func openMainWindow() {
@@ -551,6 +629,7 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshDiagnostics(
+        capabilities: [ProviderID: CapabilityStatus],
         availability: [ProviderID: ProviderAvailability],
         readiness: [ProviderID: ProviderReadiness],
         appleLanguages: [LanguageSelection]
@@ -574,6 +653,7 @@ final class AppModel: ObservableObject {
         providerDiagnostics = [
             ProviderDiagnosticStatus(
                 provider: .whisper,
+                capability: capabilities[.whisper] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
                 availability: availability[.whisper] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
                 readiness: readiness[.whisper] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
                 selectionDescription: selectedWhisper?.descriptor.name ?? settings.selectedWhisperModelID,
@@ -585,6 +665,7 @@ final class AppModel: ObservableObject {
             ),
             ProviderDiagnosticStatus(
                 provider: .parakeet,
+                capability: capabilities[.parakeet] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
                 availability: availability[.parakeet] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
                 readiness: readiness[.parakeet] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
                 selectionDescription: selectedParakeet?.descriptor.name ?? settings.selectedParakeetModelID,
@@ -596,6 +677,7 @@ final class AppModel: ObservableObject {
             ),
             ProviderDiagnosticStatus(
                 provider: .appleSpeech,
+                capability: capabilities[.appleSpeech] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
                 availability: availability[.appleSpeech] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
                 readiness: readiness[.appleSpeech] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
                 selectionDescription: settings.preferredLanguage.title,
@@ -614,6 +696,9 @@ final class AppModel: ObservableObject {
         var lines: [String] = [
             "Verbatim Diagnostics",
             "Generated: \(Date.now.formatted(date: .abbreviated, time: .standard))",
+            "System profile: \(systemProfile.summary)",
+            "Stored provider: \(settings.selectedProvider.title)",
+            "Effective provider: \(effectiveProvider.title)",
             "Storage: \(paths.rootURL.path)",
             "Logs: \(paths.logsRoot.path)",
             ""
@@ -621,6 +706,10 @@ final class AppModel: ObservableObject {
 
         for diagnostic in providerDiagnostics {
             lines.append("\(diagnostic.provider.title)")
+            lines.append("Capability: \(diagnostic.capability.kind.title)")
+            if let reason = diagnostic.capability.reason, reason.isEmpty == false {
+                lines.append("Capability reason: \(reason)")
+            }
             lines.append("Availability: \(diagnostic.availability.isAvailable ? "Available" : "Unavailable")")
             if let reason = diagnostic.availability.reason, reason.isEmpty == false {
                 lines.append("Availability reason: \(reason)")
@@ -646,5 +735,18 @@ final class AppModel: ObservableObject {
         }
 
         return lines.joined(separator: "\n")
+    }
+
+    private func effectiveLanguageForProvider(_ provider: ProviderID) -> LanguageSelection {
+        switch provider {
+        case .appleSpeech:
+            let preferred = settings.preferredLanguage
+            if preferred.isAuto == false {
+                return preferred
+            }
+            return appleInstalledLanguages.first ?? LanguageSelection(identifier: "en-US")
+        case .whisper, .parakeet:
+            return settings.preferredLanguage
+        }
     }
 }
