@@ -22,14 +22,11 @@ struct AppRootView: View {
         static let overlayMinWidth: CGFloat = 860
         static let overlayIdealWidth: CGFloat = 900
         static let overlayMinHeight: CGFloat = 580
-        static let supportWidth: CGFloat = 560
     }
 
     @EnvironmentObject private var model: AppModel
     @State private var dictionaryPhrase = ""
     @State private var dictionaryHint = ""
-
-    private let providerOrder: [ProviderID] = [.whisper, .parakeet, .appleSpeech]
 
     var body: some View {
         Group {
@@ -39,13 +36,13 @@ struct AppRootView: View {
                 onboardingView
             }
         }
-        .alert("Verbatim", isPresented: Binding(
-            get: { model.transientMessage != nil },
-            set: { if !$0 { model.transientMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) { model.transientMessage = nil }
-        } message: {
-            Text(model.transientMessage ?? "")
+        .overlay(alignment: .top) {
+            if let status = model.inlineStatusMessage {
+                InlineStatusBanner(status: status) {
+                    model.inlineStatusMessage = nil
+                }
+                    .padding(.top, 18)
+            }
         }
     }
 
@@ -98,7 +95,7 @@ struct AppRootView: View {
                         subtitle: "Choose the local transcription engine Verbatim should use.",
                         actionTitle: nil
                     ) {
-                        providerSelectionButtons
+                        ProviderSelectionButtonsView()
 
                         if let message = model.effectiveProviderMessage {
                             Text(message)
@@ -629,7 +626,6 @@ struct AppRootView: View {
             .ignoresSafeArea()
             .contentShape(Rectangle())
             .onTapGesture {
-                guard model.transientMessage == nil else { return }
                 model.dismissPresentedPanels()
             }
     }
@@ -752,7 +748,7 @@ struct AppRootView: View {
         case .transcription:
             transcriptionPanel
         case .hotkeys:
-            hotkeysPanel
+            HotkeysPanelView()
         case .privacyPermissions:
             privacyPanel
         }
@@ -818,7 +814,7 @@ struct AppRootView: View {
     private var transcriptionPanel: some View {
         VerbatimGlassGroup(spacing: Layout.sectionSpacing) {
             settingsCard("Speech to Text") {
-                providerSelectionButtons
+                ProviderSelectionButtonsView()
 
                 if let message = model.effectiveProviderMessage {
                     Text(message)
@@ -921,131 +917,6 @@ struct AppRootView: View {
         }
     }
 
-    private func providerSystemImage(_ provider: ProviderID) -> String {
-        switch provider {
-        case .whisper:
-            return "waveform"
-        case .parakeet:
-            return "antenna.radiowaves.left.and.right"
-        case .appleSpeech:
-            return "apple.logo"
-        }
-    }
-
-    private var hotkeysPanel: some View {
-        settingsCard("Global Hotkey") {
-            Toggle(isOn: Binding(
-                get: { model.settings.hotkeyEnabled },
-                set: { model.updateHotkeyEnabled($0) }
-            )) {
-                Text("Enable global activation")
-                    .font(.system(size: 14, weight: .semibold, design: .rounded))
-            }
-            .toggleStyle(.switch)
-            .disabled(model.featureCapability(for: .hotkeyCapture).isSupported == false)
-
-            Picker("Trigger mode", selection: Binding(
-                get: { model.settings.hotkeyTriggerMode },
-                set: { model.updateHotkeyTriggerMode($0) }
-            )) {
-                ForEach(HotkeyTriggerMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            .disabled(model.settings.hotkeyEnabled == false || model.featureCapability(for: .hotkeyCapture).isSupported == false)
-
-            HStack(spacing: 10) {
-                HotkeyRecorderField(shortcut: Binding(
-                    get: { model.settings.hotkeyBinding },
-                    set: { model.updateHotkeyBinding($0) }
-                ))
-                .frame(width: 220, height: 36)
-
-                Button(model.isCapturingHotkey ? "Capturing…" : "Capture") {
-                    model.beginHotkeyCapture()
-                }
-                .applyGlassButtonStyle(prominent: true)
-                .disabled(model.isCapturingHotkey || model.settings.hotkeyEnabled == false)
-
-                Button("Use Fn / Globe") {
-                    model.resetHotkeyBindingToDefault()
-                }
-                .applyGlassButtonStyle()
-                .disabled(model.settings.hotkeyEnabled == false)
-            }
-            .disabled(model.featureCapability(for: .hotkeyCapture).isSupported == false)
-
-            if model.settings.hotkeyBinding.usesFn {
-                Picker("Fn / Globe fallback", selection: Binding(
-                    get: { model.settings.functionKeyFallbackMode },
-                    set: { model.updateFunctionKeyFallbackMode($0) }
-                )) {
-                    ForEach(FunctionKeyFallbackMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .disabled(model.settings.hotkeyEnabled == false || model.featureCapability(for: .hotkeyCapture).isSupported == false)
-            }
-
-            Text("Requested binding: \(model.settings.hotkeyBinding.displayTitle)")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.mutedInk)
-
-            Text("Effective binding: \(model.hotkeyEffectiveBindingTitle)")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.mutedInk)
-
-            Text("Backend: \(model.hotkeyBackendTitle)")
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.mutedInk)
-
-            if let fallbackReason = model.hotkeyFallbackReason, fallbackReason.isEmpty == false {
-                Text(fallbackReason)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppSectionAccent.amber.tint)
-            }
-
-            Text(model.hotkeyStatusMessage)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.mutedInk)
-
-            if model.featureCapability(for: .hotkeyCapture).isSupported == false {
-                Text(model.featureCapability(for: .hotkeyCapture).detail)
-                    .font(.system(size: 13, weight: .medium, design: .rounded))
-                    .foregroundStyle(AppSectionAccent.amber.tint)
-            }
-        }
-    }
-
-    private var providerSelectionButtons: some View {
-        HStack(spacing: 8) {
-            ForEach(providerOrder) { provider in
-                let capability = model.providerCapability(for: provider)
-
-                Button {
-                    model.selectProvider(provider)
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: providerSystemImage(provider))
-                            .font(.system(size: 13, weight: .semibold))
-                        Text(provider.title)
-                            .font(.system(size: 14, weight: .semibold, design: .rounded))
-                    }
-                    .foregroundStyle(model.settings.selectedProvider == provider ? AppSectionAccent.cobalt.tint : VerbatimPalette.ink)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity)
-                    .opacity(capability.isSupported ? 1 : 0.62)
-                    .applySelectionPillStyle(selected: model.settings.selectedProvider == provider, accent: .cobalt, cornerRadius: 16)
-                }
-                .buttonStyle(.plain)
-                .disabled(model.canSelectProvider(provider) == false)
-            }
-        }
-    }
-
     private var privacyPanel: some View {
         VerbatimGlassGroup(spacing: Layout.sectionSpacing) {
             settingsCard("Permissions") {
@@ -1108,7 +979,7 @@ struct AppRootView: View {
                     .applyGlassButtonStyle()
                 }
 
-                ForEach(providerOrder) { provider in
+                ForEach([ProviderID.whisper, .parakeet, .appleSpeech]) { provider in
                     if let diagnostic = model.providerDiagnostic(for: provider) {
                         diagnosticRow(diagnostic)
                     }
@@ -1118,127 +989,7 @@ struct AppRootView: View {
     }
 
     private var supportOverlay: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Support")
-                        .font(.system(size: 28, weight: .semibold, design: .rounded))
-                    Text("Quick help for hotkeys, permissions, and local runtime setup.")
-                        .font(.system(size: 14, weight: .medium, design: .rounded))
-                        .foregroundStyle(VerbatimPalette.mutedInk)
-                }
-
-                Spacer()
-
-                Button {
-                    model.closeSupport()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundStyle(VerbatimPalette.mutedInk)
-                        .padding(10)
-                        .applySelectionPillStyle(selected: false, accent: .violet, cornerRadius: 14)
-                }
-                .buttonStyle(.plain)
-            }
-
-            supportCard(
-                title: "Hotkey",
-                subtitle: "Current global shortcut",
-                detail: [
-                    "Requested: \(model.settings.hotkeyBinding.displayTitle)",
-                    "Effective: \(model.hotkeyEffectiveBindingTitle)",
-                    "Backend: \(model.hotkeyBackendTitle)",
-                    "Trigger mode: \(model.settings.hotkeyTriggerMode.title)",
-                    model.hotkeyFallbackReason
-                ]
-                .compactMap { $0 }
-                .joined(separator: "\n")
-            )
-
-            supportCard(
-                title: "Permissions",
-                subtitle: "Microphone is required. Accessibility is optional unless you want auto-paste.",
-                detail: "Microphone: \(model.permissionsManager.microphoneAuthorized ? "Granted" : "Missing")\nAccessibility: \(model.permissionsManager.accessibilityAuthorized ? "Granted" : "Missing")"
-            )
-
-            supportCard(
-                title: "Storage",
-                subtitle: "Local history, dictionary, models, and logs live here.",
-                detail: model.paths.rootURL.path
-            )
-
-            supportCard(
-                title: "Local Runtimes",
-                subtitle: "Whisper uses whisper-server, Parakeet uses sherpa-onnx, and Apple Speech uses macOS system assets.",
-                detail: "Everything continues to work offline after models and Apple language assets are installed.\n\(model.providerPrewarmStatusMessage)"
-            )
-
-            supportCard(
-                title: "Diagnostics",
-                subtitle: "Current provider/runtime summary",
-                detail: model.supportDiagnosticsSummary.isEmpty ? "Checking local runtime state…" : model.supportDiagnosticsSummary
-            )
-
-            HStack(spacing: 10) {
-                Button("Re-check") {
-                    Task { await model.recheckDiagnostics() }
-                }
-                .applyGlassButtonStyle(prominent: true)
-
-                Button("Reveal Logs") {
-                    model.revealLogs()
-                }
-                .applyGlassButtonStyle()
-
-                Button("Copy Diagnostics") {
-                    model.copyDiagnostics()
-                }
-                .applyGlassButtonStyle()
-
-                Button("Reveal Application Support") {
-                    model.revealAppSupport()
-                }
-                .applyGlassButtonStyle()
-
-                Button("Microphone Settings") {
-                    model.permissionsManager.openMicrophoneSettings()
-                }
-                .applyGlassButtonStyle()
-
-                Button("Accessibility Settings") {
-                    model.permissionsManager.openAccessibilitySettings()
-                }
-                .applyGlassButtonStyle()
-            }
-
-            HStack {
-                Spacer()
-                Button("Close") {
-                    model.closeSupport()
-                }
-                .applyGlassButtonStyle(prominent: true)
-            }
-        }
-        .padding(24)
-        .frame(width: Layout.supportWidth)
-        .applyLiquidCardStyle(cornerRadius: 30, tone: .shell, padding: 0)
-        .shadow(color: Color.black.opacity(0.16), radius: 30, x: 0, y: 18)
-    }
-
-    private func supportCard(title: String, subtitle: String, detail: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.system(size: 17, weight: .semibold, design: .rounded))
-            Text(subtitle)
-                .font(.system(size: 13, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.mutedInk)
-            Text(detail)
-                .font(.system(size: 12, weight: .medium, design: .rounded))
-                .foregroundStyle(VerbatimPalette.ink)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .applyLiquidCardStyle(cornerRadius: 22, tone: .frost, padding: Layout.cardPadding)
+        SupportOverlayView()
     }
 
     private func diagnosticRow(_ diagnostic: ProviderDiagnosticStatus) -> some View {

@@ -3,6 +3,14 @@ import Darwin
 
 protocol SharedCoreBridgeProtocol: AnyObject {
     func prepareTrigger(mode: TriggerMode)
+    func resolveCapabilities(
+        manifest: CapabilityManifest,
+        profile: SystemProfile,
+        storedProvider: ProviderID,
+        fallbackOrder: [ProviderID],
+        availability: [ProviderID: ProviderAvailability],
+        readiness: [ProviderID: ProviderReadiness]
+    ) -> SharedCoreCapabilityResolution
     func summarizeTriggerState(
         mode: TriggerMode,
         startResult: HotkeyStartResult
@@ -39,6 +47,15 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
     }
 
     private struct EmptyResponse: Decodable {}
+
+    private struct CapabilityResolutionRequest: Encodable {
+        let manifest: CapabilityManifest
+        let profile: SystemProfile
+        let storedProvider: ProviderID
+        let fallbackOrder: [ProviderID]
+        let availability: [ProviderID: ProviderAvailability]
+        let readiness: [ProviderID: ProviderReadiness]
+    }
 
     private struct SummarizeHotkeyStartResponse: Decodable {
         let statusMessage: String
@@ -131,6 +148,7 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
     private var engineFree: EngineFree?
     private var freeString: FreeString?
     private var prepareTriggerFunction: JSONCall?
+    private var resolveCapabilitiesFunction: JSONCall?
     private var summarizeTriggerStateFunction: JSONCall?
     private var handleInputEventFunction: JSONCall?
     private var resolveStyleContextFunction: JSONCall?
@@ -156,6 +174,38 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
         if call(function: prepareTriggerFunction, request: request, decode: EmptyResponse.self) == nil {
             fallback.prepareTrigger(mode: mode)
         }
+    }
+
+    func resolveCapabilities(
+        manifest: CapabilityManifest,
+        profile: SystemProfile,
+        storedProvider: ProviderID,
+        fallbackOrder: [ProviderID],
+        availability: [ProviderID: ProviderAvailability],
+        readiness: [ProviderID: ProviderReadiness]
+    ) -> SharedCoreCapabilityResolution {
+        guard let response: SharedCoreCapabilityResolution = call(
+            function: resolveCapabilitiesFunction,
+            request: CapabilityResolutionRequest(
+                manifest: manifest,
+                profile: profile,
+                storedProvider: storedProvider,
+                fallbackOrder: fallbackOrder,
+                availability: availability,
+                readiness: readiness
+            ),
+            decode: SharedCoreCapabilityResolution.self
+        ) else {
+            return fallback.resolveCapabilities(
+                manifest: manifest,
+                profile: profile,
+                storedProvider: storedProvider,
+                fallbackOrder: fallbackOrder,
+                availability: availability,
+                readiness: readiness
+            )
+        }
+        return response
     }
 
     func summarizeTriggerState(mode: TriggerMode, startResult: HotkeyStartResult) -> TriggerStateSummary {
@@ -225,6 +275,7 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
             engineFree = resolveSymbol(named: "verbatim_core_engine_free", in: handle, as: EngineFree.self)
             freeString = resolveSymbol(named: "verbatim_core_free_string", in: handle, as: FreeString.self)
             prepareTriggerFunction = resolveSymbol(named: "verbatim_core_prepare_trigger", in: handle, as: JSONCall.self)
+            resolveCapabilitiesFunction = resolveSymbol(named: "verbatim_core_resolve_capabilities", in: handle, as: JSONCall.self)
             summarizeTriggerStateFunction = resolveSymbol(named: "verbatim_core_summarize_trigger_state", in: handle, as: JSONCall.self)
             handleInputEventFunction = resolveSymbol(named: "verbatim_core_handle_input_event", in: handle, as: JSONCall.self)
             resolveStyleContextFunction = resolveSymbol(named: "verbatim_core_resolve_style_context", in: handle, as: JSONCall.self)
@@ -240,6 +291,7 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
             engineHandle = engineNew?()
             if engineHandle != nil,
                prepareTriggerFunction != nil,
+               resolveCapabilitiesFunction != nil,
                summarizeTriggerStateFunction != nil,
                handleInputEventFunction != nil,
                resolveStyleContextFunction != nil,
@@ -336,6 +388,38 @@ private final class SharedCoreFallback {
         currentTriggerMode = mode
         hotkeyIsPressed = false
         lastTapAt = nil
+    }
+
+    func resolveCapabilities(
+        manifest: CapabilityManifest,
+        profile: SystemProfile,
+        storedProvider: ProviderID,
+        fallbackOrder: [ProviderID],
+        availability: [ProviderID: ProviderAvailability],
+        readiness: [ProviderID: ProviderReadiness]
+    ) -> SharedCoreCapabilityResolution {
+        let capabilityMatrix = CapabilityMatrix(manifest: manifest)
+        let providerCapabilities = Dictionary(uniqueKeysWithValues: ProviderID.allCases.map { provider in
+            let capability = capabilityMatrix.providerCapability(
+                for: provider,
+                profile: profile,
+                availability: availability[provider] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
+                readiness: readiness[provider] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil)
+            )
+            return (provider, capability)
+        })
+        let featureCapabilities = Dictionary(uniqueKeysWithValues: FeatureID.allCases.map { feature in
+            (feature, capabilityMatrix.featureCapability(for: feature, profile: profile))
+        })
+        return SharedCoreCapabilityResolution(
+            providerCapabilities: providerCapabilities,
+            featureCapabilities: featureCapabilities,
+            effectiveProvider: capabilityMatrix.effectiveProvider(
+                storedProvider: storedProvider,
+                capabilities: providerCapabilities,
+                fallbackOrder: fallbackOrder
+            )
+        )
     }
 
     func summarizeTriggerState(

@@ -2,7 +2,6 @@ import XCTest
 import Carbon
 @testable import Verbatim
 
-@MainActor
 private final class StubActiveAppContextService: ActiveAppContextServiceProtocol {
     var context: ActiveAppContext
 

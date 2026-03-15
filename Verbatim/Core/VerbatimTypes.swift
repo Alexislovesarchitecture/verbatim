@@ -911,6 +911,12 @@ struct CapabilityManifest: Equatable, Codable, Sendable {
     var features: [FeatureCapabilityDescriptor]
 }
 
+struct SharedCoreCapabilityResolution: Equatable, Codable, Sendable {
+    var providerCapabilities: [ProviderID: CapabilityStatus]
+    var featureCapabilities: [FeatureID: CapabilityStatus]
+    var effectiveProvider: ProviderID
+}
+
 struct DictionaryEntry: Identifiable, Equatable, Codable, Sendable {
     var id: UUID
     var phrase: String
@@ -1002,9 +1008,47 @@ enum PasteMode: String, CaseIterable, Identifiable, Codable, Sendable {
     }
 }
 
+struct ProviderLanguageSettings: Codable, Equatable, Sendable {
+    var appleSpeechID: String = "en-US"
+    var whisperID: String = LanguageSelection.auto.identifier
+    var parakeetID: String = LanguageSelection.auto.identifier
+
+    func language(for provider: ProviderID) -> LanguageSelection {
+        switch provider {
+        case .appleSpeech:
+            return LanguageSelection(identifier: appleSpeechID)
+        case .whisper:
+            return LanguageSelection(identifier: whisperID)
+        case .parakeet:
+            return LanguageSelection(identifier: parakeetID)
+        }
+    }
+
+    mutating func setLanguage(_ language: LanguageSelection, for provider: ProviderID) {
+        switch provider {
+        case .appleSpeech:
+            appleSpeechID = language.identifier
+        case .whisper:
+            whisperID = language.identifier
+        case .parakeet:
+            parakeetID = language.identifier
+        }
+    }
+}
+
+enum InlineStatusTone: String, Codable, Equatable, Sendable {
+    case info
+    case warning
+}
+
+struct InlineStatusMessage: Codable, Equatable, Sendable {
+    var text: String
+    var tone: InlineStatusTone
+}
+
 struct AppSettings: Codable, Equatable, Sendable {
     var selectedProvider: ProviderID = .appleSpeech
-    var preferredLanguageID: String = "en-US"
+    var preferredLanguages: ProviderLanguageSettings = .init()
     var selectedWhisperModelID: String = "base"
     var selectedParakeetModelID: String = "parakeet-tdt-0.6b-v3"
     var styleSettings: StyleSettings = .init()
@@ -1021,6 +1065,7 @@ struct AppSettings: Codable, Equatable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case selectedProvider
+        case preferredLanguages
         case preferredLanguageID
         case selectedWhisperModelID
         case selectedParakeetModelID
@@ -1044,7 +1089,13 @@ struct AppSettings: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         selectedProvider = try container.decodeIfPresent(ProviderID.self, forKey: .selectedProvider) ?? .appleSpeech
-        preferredLanguageID = try container.decodeIfPresent(String.self, forKey: .preferredLanguageID) ?? "en-US"
+        preferredLanguages = try container.decodeIfPresent(ProviderLanguageSettings.self, forKey: .preferredLanguages) ?? .init()
+        let legacyPreferredLanguageID = try container.decodeIfPresent(String.self, forKey: .preferredLanguageID) ?? "en-US"
+        if container.contains(.preferredLanguages) == false {
+            preferredLanguages.appleSpeechID = legacyPreferredLanguageID
+            preferredLanguages.whisperID = LanguageSelection.auto.identifier
+            preferredLanguages.parakeetID = LanguageSelection.auto.identifier
+        }
         selectedWhisperModelID = try container.decodeIfPresent(String.self, forKey: .selectedWhisperModelID) ?? "base"
         selectedParakeetModelID = try container.decodeIfPresent(String.self, forKey: .selectedParakeetModelID) ?? "parakeet-tdt-0.6b-v3"
         styleSettings = try container.decodeIfPresent(StyleSettings.self, forKey: .styleSettings) ?? .init()
@@ -1076,7 +1127,7 @@ struct AppSettings: Codable, Equatable, Sendable {
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(selectedProvider, forKey: .selectedProvider)
-        try container.encode(preferredLanguageID, forKey: .preferredLanguageID)
+        try container.encode(preferredLanguages, forKey: .preferredLanguages)
         try container.encode(selectedWhisperModelID, forKey: .selectedWhisperModelID)
         try container.encode(selectedParakeetModelID, forKey: .selectedParakeetModelID)
         try container.encode(styleSettings, forKey: .styleSettings)
@@ -1092,9 +1143,22 @@ struct AppSettings: Codable, Equatable, Sendable {
         try container.encode(lastSettingsTab, forKey: .lastSettingsTab)
     }
 
+    var preferredLanguageID: String {
+        get { preferredLanguages.language(for: selectedProvider).identifier }
+        set { preferredLanguages.setLanguage(LanguageSelection(identifier: newValue), for: selectedProvider) }
+    }
+
     var preferredLanguage: LanguageSelection {
-        get { LanguageSelection(identifier: preferredLanguageID) }
-        set { preferredLanguageID = newValue.identifier }
+        get { preferredLanguage(for: selectedProvider) }
+        set { setPreferredLanguage(newValue, for: selectedProvider) }
+    }
+
+    func preferredLanguage(for provider: ProviderID) -> LanguageSelection {
+        preferredLanguages.language(for: provider)
+    }
+
+    mutating func setPreferredLanguage(_ language: LanguageSelection, for provider: ProviderID) {
+        preferredLanguages.setLanguage(language, for: provider)
     }
 
     var hotkeyTriggerMode: HotkeyTriggerMode {

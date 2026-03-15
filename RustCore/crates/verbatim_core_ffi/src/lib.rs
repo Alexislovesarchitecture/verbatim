@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_void};
 
@@ -25,6 +26,14 @@ struct ResponseEnvelope<T: Serialize> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct EmptyResponse {}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+enum ProviderID {
+    AppleSpeech,
+    Whisper,
+    Parakeet,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -69,6 +78,146 @@ enum HotkeyBackend {
     FunctionKeySpecialCase,
     Fallback,
     Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum OperatingSystemFamily {
+    Macos,
+    Windows,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CPUArchitecture {
+    Arm64,
+    X86_64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum AcceleratorClass {
+    None,
+    AppleSilicon,
+    NvidiaCuda,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemVersionInfo {
+    major: i32,
+    minor: i32,
+    patch: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SystemProfile {
+    os_family: OperatingSystemFamily,
+    os_version: SystemVersionInfo,
+    architecture: CPUArchitecture,
+    accelerator: AcceleratorClass,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityRequirement {
+    allowed_os_families: Vec<OperatingSystemFamily>,
+    allowed_architectures: Vec<CPUArchitecture>,
+    required_accelerators: Vec<AcceleratorClass>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum CapabilityStatusKind {
+    Available,
+    Unsupported,
+    SupportedButNotReady,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityStatus {
+    kind: CapabilityStatusKind,
+    reason: Option<String>,
+    action_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderCapabilityDescriptor {
+    provider: ProviderID,
+    title: String,
+    requirements: CapabilityRequirement,
+    unsupported_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+enum FeatureID {
+    ProviderSelection,
+    AutoPaste,
+    HotkeyCapture,
+    ModelManagement,
+    AppleSpeechAssets,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FeatureCapabilityDescriptor {
+    feature: FeatureID,
+    title: String,
+    requirements: CapabilityRequirement,
+    unsupported_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityManifest {
+    providers: Vec<ProviderCapabilityDescriptor>,
+    features: Vec<FeatureCapabilityDescriptor>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderAvailability {
+    is_available: bool,
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProviderReadinessKind {
+    Ready,
+    Installable,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderReadiness {
+    kind: ProviderReadinessKind,
+    message: String,
+    action_title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityResolutionRequest {
+    manifest: CapabilityManifest,
+    profile: SystemProfile,
+    stored_provider: ProviderID,
+    fallback_order: Vec<ProviderID>,
+    availability: HashMap<ProviderID, ProviderAvailability>,
+    readiness: HashMap<ProviderID, ProviderReadiness>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CapabilityResolutionResponse {
+    provider_capabilities: HashMap<ProviderID, CapabilityStatus>,
+    feature_capabilities: HashMap<FeatureID, CapabilityStatus>,
+    effective_provider: ProviderID,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -245,6 +394,60 @@ pub extern "C" fn verbatim_core_prepare_trigger(engine: *mut c_void, request_jso
         engine.trigger_state.is_pressed = false;
         engine.trigger_state.last_tap_at_ms = None;
         Ok(EmptyResponse {})
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn verbatim_core_resolve_capabilities(engine: *mut c_void, request_json: *const c_char) -> *mut c_char {
+    respond(engine, request_json, |_engine, request: CapabilityResolutionRequest| {
+        let mut provider_capabilities = HashMap::new();
+        for provider in [ProviderID::AppleSpeech, ProviderID::Whisper, ProviderID::Parakeet] {
+            let availability = request
+                .availability
+                .get(&provider)
+                .cloned()
+                .unwrap_or(ProviderAvailability {
+                    is_available: false,
+                    reason: Some("Checking…".to_string()),
+                });
+            let readiness = request
+                .readiness
+                .get(&provider)
+                .cloned()
+                .unwrap_or(ProviderReadiness {
+                    kind: ProviderReadinessKind::Unavailable,
+                    message: "Checking…".to_string(),
+                    action_title: None,
+                });
+            provider_capabilities.insert(
+                provider.clone(),
+                provider_capability(&request.manifest, &provider, &request.profile, &availability, &readiness),
+            );
+        }
+
+        let mut feature_capabilities = HashMap::new();
+        for feature in [
+            FeatureID::ProviderSelection,
+            FeatureID::AutoPaste,
+            FeatureID::HotkeyCapture,
+            FeatureID::ModelManagement,
+            FeatureID::AppleSpeechAssets,
+        ] {
+            feature_capabilities.insert(
+                feature.clone(),
+                feature_capability(&request.manifest, &feature, &request.profile),
+            );
+        }
+
+        Ok(CapabilityResolutionResponse {
+            effective_provider: effective_provider(
+                &request.stored_provider,
+                &provider_capabilities,
+                &request.fallback_order,
+            ),
+            provider_capabilities,
+            feature_capabilities,
+        })
     })
 }
 
@@ -443,6 +646,130 @@ fn backend_title(backend: &HotkeyBackend) -> String {
         HotkeyBackend::FunctionKeySpecialCase => "Fn / Globe".to_string(),
         HotkeyBackend::Fallback => "Fallback shortcut".to_string(),
         HotkeyBackend::Unavailable => "Unavailable".to_string(),
+    }
+}
+
+fn provider_capability(
+    manifest: &CapabilityManifest,
+    provider: &ProviderID,
+    profile: &SystemProfile,
+    availability: &ProviderAvailability,
+    readiness: &ProviderReadiness,
+) -> CapabilityStatus {
+    if let Some(descriptor) = manifest.providers.iter().find(|descriptor| descriptor.provider == *provider) {
+        if !supports_profile(&descriptor.requirements, profile) {
+            return CapabilityStatus {
+                kind: CapabilityStatusKind::Unsupported,
+                reason: Some(descriptor.unsupported_reason.clone()),
+                action_title: None,
+            };
+        }
+    } else if availability.is_available && readiness.kind == ProviderReadinessKind::Ready {
+        return CapabilityStatus {
+            kind: CapabilityStatusKind::Available,
+            reason: None,
+            action_title: None,
+        };
+    }
+
+    if !availability.is_available {
+        return CapabilityStatus {
+            kind: CapabilityStatusKind::SupportedButNotReady,
+            reason: Some(
+                availability
+                    .reason
+                    .clone()
+                    .unwrap_or_else(|| format!("{} is not ready on this system.", provider_title(provider))),
+            ),
+            action_title: None,
+        };
+    }
+
+    if readiness.kind != ProviderReadinessKind::Ready {
+        return CapabilityStatus {
+            kind: CapabilityStatusKind::SupportedButNotReady,
+            reason: Some(readiness.message.clone()),
+            action_title: readiness.action_title.clone(),
+        };
+    }
+
+    CapabilityStatus {
+        kind: CapabilityStatusKind::Available,
+        reason: None,
+        action_title: None,
+    }
+}
+
+fn feature_capability(
+    manifest: &CapabilityManifest,
+    feature: &FeatureID,
+    profile: &SystemProfile,
+) -> CapabilityStatus {
+    if let Some(descriptor) = manifest.features.iter().find(|descriptor| descriptor.feature == *feature) {
+        if !supports_profile(&descriptor.requirements, profile) {
+            return CapabilityStatus {
+                kind: CapabilityStatusKind::Unsupported,
+                reason: Some(descriptor.unsupported_reason.clone()),
+                action_title: None,
+            };
+        }
+    }
+
+    CapabilityStatus {
+        kind: CapabilityStatusKind::Available,
+        reason: None,
+        action_title: None,
+    }
+}
+
+fn effective_provider(
+    stored_provider: &ProviderID,
+    capabilities: &HashMap<ProviderID, CapabilityStatus>,
+    fallback_order: &[ProviderID],
+) -> ProviderID {
+    if capabilities
+        .get(stored_provider)
+        .map(|capability| capability.kind != CapabilityStatusKind::Unsupported)
+        .unwrap_or(false)
+    {
+        return stored_provider.clone();
+    }
+
+    if let Some(provider) = fallback_order.iter().find(|provider| {
+        capabilities
+            .get(*provider)
+            .map(|capability| capability.kind == CapabilityStatusKind::Available)
+            .unwrap_or(false)
+    }) {
+        return provider.clone();
+    }
+
+    if let Some(provider) = fallback_order.iter().find(|provider| {
+        capabilities
+            .get(*provider)
+            .map(|capability| capability.kind != CapabilityStatusKind::Unsupported)
+            .unwrap_or(false)
+    }) {
+        return provider.clone();
+    }
+
+    stored_provider.clone()
+}
+
+fn supports_profile(requirement: &CapabilityRequirement, profile: &SystemProfile) -> bool {
+    let os_supported = requirement.allowed_os_families.is_empty() || requirement.allowed_os_families.contains(&profile.os_family);
+    let architecture_supported =
+        requirement.allowed_architectures.is_empty() || requirement.allowed_architectures.contains(&profile.architecture);
+    let accelerator_supported =
+        requirement.required_accelerators.is_empty() || requirement.required_accelerators.contains(&profile.accelerator);
+    os_supported && architecture_supported && accelerator_supported
+}
+
+fn provider_title(provider: &ProviderID) -> &'static str {
+    match provider {
+        ProviderID::AppleSpeech => "Apple Speech",
+        ProviderID::Whisper => "Whisper",
+        ProviderID::Parakeet => "Parakeet",
     }
 }
 

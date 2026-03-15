@@ -15,7 +15,7 @@ final class AppModel: ObservableObject {
             settingsStore.replace(settings)
             let providerConfigurationChanged =
                 oldValue.selectedProvider != settings.selectedProvider ||
-                oldValue.preferredLanguageID != settings.preferredLanguageID ||
+                oldValue.preferredLanguages != settings.preferredLanguages ||
                 oldValue.selectedWhisperModelID != settings.selectedWhisperModelID ||
                 oldValue.selectedParakeetModelID != settings.selectedParakeetModelID
 
@@ -73,9 +73,10 @@ final class AppModel: ObservableObject {
     @Published var providerReadiness: [ProviderID: ProviderReadiness] = [:]
     @Published var providerDiagnostics: [ProviderDiagnosticStatus] = []
     @Published var appleInstalledLanguages: [LanguageSelection] = []
+    @Published var resolvedEffectiveProvider: ProviderID?
     @Published var isPreparing = false
     @Published var isCapturingHotkey = false
-    @Published var transientMessage: String?
+    @Published var inlineStatusMessage: InlineStatusMessage?
     @Published var hotkeyStatusMessage: String = ""
     @Published var hotkeyEffectiveBindingTitle: String = ""
     @Published var hotkeyBackendTitle: String = "Unavailable"
@@ -98,7 +99,6 @@ final class AppModel: ObservableObject {
     private let parakeetModelManager: ParakeetModelManager
     private let whisperRuntimeManager: WhisperRuntimeManager
     private let parakeetRuntimeManager: ParakeetRuntimeManager
-    private let capabilityMatrix: CapabilityMatrix
     private let activeAppContextService: ActiveAppContextServiceProtocol
     private let sharedCore: SharedCoreBridgeProtocol
     private let appleProvider: AppleSpeechProvider
@@ -126,7 +126,6 @@ final class AppModel: ObservableObject {
         self.hotkeyManager = HotkeyManager()
         let logStore = VerbatimLogStore(paths: paths)
         self.logStore = logStore
-        self.capabilityMatrix = CapabilityMatrix(manifest: CapabilityManifestRepository.load())
         self.activeAppContextService = ActiveAppContextService()
         self.sharedCore = SharedCoreBridge()
 
@@ -192,7 +191,7 @@ final class AppModel: ObservableObject {
         } catch {
             diagnosticsLogger.error("Runtime staging preflight failed: \(error.localizedDescription, privacy: .public)")
             logStore.append("Runtime staging preflight failed: \(error.localizedDescription)", category: .diagnostics)
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
 
         await whisperModelManager.importFromElectronCacheIfNeeded()
@@ -226,7 +225,7 @@ final class AppModel: ObservableObject {
         }
         guard granted else {
             applyOverlayStatus(.error("Microphone required"))
-            transientMessage = "Microphone access is required before dictation can start."
+            inlineStatusMessage = InlineStatusMessage(text: "Microphone access is required before dictation can start.", tone: .warning)
             return
         }
 
@@ -240,7 +239,7 @@ final class AppModel: ObservableObject {
             applyOverlayStatus(.recording)
         } catch {
             applyOverlayStatus(.error(error.localizedDescription))
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
     }
 
@@ -260,17 +259,17 @@ final class AppModel: ObservableObject {
             case .pasted:
                 let message = "Transcription pasted"
                 applyOverlayStatus(.success(message))
-                transientMessage = nil
+                inlineStatusMessage = nil
             case .copiedOnly:
                 applyOverlayStatus(.idle)
-                transientMessage = nil
+                inlineStatusMessage = nil
             case .failed(let message):
                 applyOverlayStatus(.error(message))
-                transientMessage = message
+                inlineStatusMessage = InlineStatusMessage(text: message, tone: .warning)
             }
         } catch {
             applyOverlayStatus(.error("Transcription failed"))
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
             reloadLocalState()
         }
     }
@@ -286,7 +285,10 @@ final class AppModel: ObservableObject {
 
     func installAppleAssets() async {
         guard featureCapability(for: .appleSpeechAssets).isSupported else {
-            transientMessage = featureCapability(for: .appleSpeechAssets).reason ?? "Apple Speech assets are unavailable on this system."
+            inlineStatusMessage = InlineStatusMessage(
+                text: featureCapability(for: .appleSpeechAssets).reason ?? "Apple Speech assets are unavailable on this system.",
+                tone: .warning
+            )
             return
         }
 
@@ -296,7 +298,7 @@ final class AppModel: ObservableObject {
             await refreshProviderState()
         } catch {
             logStore.append("Failed Apple Speech asset install: \(error.localizedDescription)", category: .downloads)
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
     }
 
@@ -304,7 +306,7 @@ final class AppModel: ObservableObject {
         do {
             try await whisperModelManager.download(modelID: id)
         } catch {
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
         reloadLocalState()
         await refreshProviderState()
@@ -314,7 +316,7 @@ final class AppModel: ObservableObject {
         do {
             try await whisperModelManager.delete(modelID: id)
         } catch {
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
         reloadLocalState()
         await refreshProviderState()
@@ -324,7 +326,7 @@ final class AppModel: ObservableObject {
         do {
             try await parakeetModelManager.download(modelID: id)
         } catch {
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
         reloadLocalState()
         await refreshProviderState()
@@ -334,7 +336,7 @@ final class AppModel: ObservableObject {
         do {
             try await parakeetModelManager.delete(modelID: id)
         } catch {
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
         reloadLocalState()
         await refreshProviderState()
@@ -366,7 +368,7 @@ final class AppModel: ObservableObject {
         NSPasteboard.general.clearContents()
         let text = item.finalPastedText.isEmpty ? item.originalText : item.finalPastedText
         _ = NSPasteboard.general.setString(text, forType: .string)
-        transientMessage = "Copied transcription to clipboard."
+        inlineStatusMessage = InlineStatusMessage(text: "Copied transcription to clipboard.", tone: .info)
     }
 
     func resetOnboarding() {
@@ -397,7 +399,7 @@ final class AppModel: ObservableObject {
     func copyDiagnostics() {
         NSPasteboard.general.clearContents()
         _ = NSPasteboard.general.setString(diagnosticsReport(), forType: .string)
-        transientMessage = "Copied diagnostics to clipboard."
+        inlineStatusMessage = InlineStatusMessage(text: "Copied diagnostics to clipboard.", tone: .info)
     }
 
     func resetAppData() {
@@ -522,7 +524,7 @@ final class AppModel: ObservableObject {
         do {
             try RuntimeBinaryInstaller.installIfNeeded(paths: paths)
         } catch {
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
         await refreshProviderState()
     }
@@ -530,7 +532,10 @@ final class AppModel: ObservableObject {
     func restartRuntime(for provider: ProviderID) async {
         let capability = providerCapability(for: provider)
         guard capability.isSupported else {
-            transientMessage = capability.reason ?? "\(provider.title) is unavailable on this system."
+            inlineStatusMessage = InlineStatusMessage(
+                text: capability.reason ?? "\(provider.title) is unavailable on this system.",
+                tone: .warning
+            )
             return
         }
 
@@ -552,9 +557,9 @@ final class AppModel: ObservableObject {
                 await refreshProviderState()
                 return
             }
-            transientMessage = "Restarted \(provider.title) runtime."
+            inlineStatusMessage = InlineStatusMessage(text: "Restarted \(provider.title) runtime.", tone: .info)
         } catch {
-            transientMessage = error.localizedDescription
+            inlineStatusMessage = InlineStatusMessage(text: error.localizedDescription, tone: .warning)
         }
         await refreshProviderState()
         await maybePrewarmSelectedProviderIfNeeded(reason: "\(provider.title) runtime restarted")
@@ -594,7 +599,10 @@ final class AppModel: ObservableObject {
 
     func selectProvider(_ provider: ProviderID) {
         guard canSelectProvider(provider) else {
-            transientMessage = providerCapability(for: provider).reason ?? "\(provider.title) is unavailable on this system."
+            inlineStatusMessage = InlineStatusMessage(
+                text: providerCapability(for: provider).reason ?? "\(provider.title) is unavailable on this system.",
+                tone: .warning
+            )
             return
         }
         settings.selectedProvider = provider
@@ -609,11 +617,7 @@ final class AppModel: ObservableObject {
     }
 
     var effectiveProvider: ProviderID {
-        capabilityMatrix.effectiveProvider(
-            storedProvider: settings.selectedProvider,
-            capabilities: providerCapabilities,
-            fallbackOrder: providerFallbackOrder
-        )
+        resolvedEffectiveProvider ?? settings.selectedProvider
     }
 
     var effectiveLanguage: LanguageSelection {
@@ -663,24 +667,24 @@ final class AppModel: ObservableObject {
 
         for (providerID, provider) in providers {
             availability[providerID] = await provider.availability()
-            readiness[providerID] = await provider.readiness(for: settings.preferredLanguage)
-        }
-        for providerID in providers.keys {
-            capabilities[providerID] = capabilityMatrix.providerCapability(
-                for: providerID,
-                profile: systemProfile,
-                availability: availability[providerID] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
-                readiness: readiness[providerID] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil)
-            )
+            readiness[providerID] = await provider.readiness(for: settings.preferredLanguage(for: providerID))
         }
         let installedLanguages = await appleProvider.installedLanguages()
+        let capabilityResolution = sharedCore.resolveCapabilities(
+            manifest: CapabilityManifestRepository.load(),
+            profile: systemProfile,
+            storedProvider: settings.selectedProvider,
+            fallbackOrder: providerFallbackOrder,
+            availability: availability,
+            readiness: readiness
+        )
+        capabilities = capabilityResolution.providerCapabilities
         appleInstalledLanguages = installedLanguages
         providerAvailability = availability
         providerReadiness = readiness
         providerCapabilities = capabilities
-        featureCapabilities = Dictionary(uniqueKeysWithValues: FeatureID.allCases.map { feature in
-            (feature, capabilityMatrix.featureCapability(for: feature, profile: systemProfile))
-        })
+        featureCapabilities = capabilityResolution.featureCapabilities
+        resolvedEffectiveProvider = capabilityResolution.effectiveProvider
         await refreshDiagnostics(
             capabilities: capabilities,
             availability: availability,
@@ -859,8 +863,8 @@ final class AppModel: ObservableObject {
                 capability: capabilities[.appleSpeech] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
                 availability: availability[.appleSpeech] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
                 readiness: readiness[.appleSpeech] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
-                selectionDescription: settings.preferredLanguage.title,
-                selectionInstalled: settings.preferredLanguage.isAuto == false && appleLanguages.contains(settings.preferredLanguage),
+                selectionDescription: settings.preferredLanguage(for: .appleSpeech).title,
+                selectionInstalled: settings.preferredLanguage(for: .appleSpeech).isAuto == false && appleLanguages.contains(settings.preferredLanguage(for: .appleSpeech)),
                 selectionSource: nil,
                 runtimeSnapshot: nil,
                 lastCheck: .now,
@@ -943,15 +947,15 @@ final class AppModel: ObservableObject {
     }
 
     private func effectiveLanguageForProvider(_ provider: ProviderID) -> LanguageSelection {
+        let preferred = settings.preferredLanguage(for: provider)
         switch provider {
         case .appleSpeech:
-            let preferred = settings.preferredLanguage
             if preferred.isAuto == false {
                 return preferred
             }
             return appleInstalledLanguages.first ?? LanguageSelection(identifier: "en-US")
         case .whisper, .parakeet:
-            return settings.preferredLanguage
+            return preferred
         }
     }
 }

@@ -20,6 +20,8 @@ Native macOS dictation app that keeps the existing Verbatim identity and visual 
 
 - Native shared source tree: [`Verbatim/`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim)
 - Architecture note: [`docs/architecture.md`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/docs/architecture.md)
+- Shell/core contract: [`docs/shell-core-contract.md`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/docs/shell-core-contract.md)
+- Release checklist: [`docs/release-checklist.md`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/docs/release-checklist.md)
 - App entry: [`Verbatim/App/VerbatimNativeApp.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/App/VerbatimNativeApp.swift)
 - App state/orchestration: [`Verbatim/App/AppModel.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/App/AppModel.swift)
 - Provider/runtime services: [`Verbatim/Services/TranscriptionServices.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/Services/TranscriptionServices.swift)
