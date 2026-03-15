@@ -11,6 +11,27 @@ protocol SharedCoreBridgeProtocol: AnyObject {
         availability: [ProviderID: ProviderAvailability],
         readiness: [ProviderID: ProviderReadiness]
     ) -> SharedCoreCapabilityResolution
+    func resolveSelection(
+        storedProvider: ProviderID,
+        fallbackOrder: [ProviderID],
+        capabilities: [ProviderID: CapabilityStatus],
+        preferredLanguages: ProviderLanguageSettings,
+        appleInstalledLanguages: [LanguageSelection]
+    ) -> SharedCoreSelectionResolution
+    func resolveProviderModelSelection(
+        selectedProvider: ProviderID,
+        selectedWhisperModelID: String,
+        selectedParakeetModelID: String,
+        whisperStatuses: [ProviderModelStatusInput],
+        parakeetStatuses: [ProviderModelStatusInput],
+        appleInstalledLanguages: [LanguageSelection]
+    ) -> ProviderModelSelectionResolution
+    func buildHistorySections(
+        items: [HistoryItem],
+        searchText: String,
+        now: Date
+    ) -> [HistoryDaySection]
+    func reduceProviderDiagnostics(_ inputs: [ProviderDiagnosticInput]) -> [ProviderDiagnosticReduction]
     func summarizeTriggerState(
         mode: TriggerMode,
         startResult: HotkeyStartResult
@@ -55,6 +76,34 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
         let fallbackOrder: [ProviderID]
         let availability: [ProviderID: ProviderAvailability]
         let readiness: [ProviderID: ProviderReadiness]
+    }
+
+    private struct ProviderDiagnosticsRequest: Encodable {
+        let inputs: [ProviderDiagnosticInput]
+    }
+
+    private struct SelectionResolutionRequest: Encodable {
+        let storedProvider: ProviderID
+        let fallbackOrder: [ProviderID]
+        let capabilities: [ProviderID: CapabilityStatus]
+        let preferredLanguages: ProviderLanguageSettings
+        let appleInstalledLanguages: [LanguageSelection]
+    }
+
+    private struct ProviderModelSelectionRequest: Encodable {
+        let selectedProvider: ProviderID
+        let selectedWhisperModelID: String
+        let selectedParakeetModelID: String
+        let whisperStatuses: [ProviderModelStatusInput]
+        let parakeetStatuses: [ProviderModelStatusInput]
+        let appleInstalledLanguages: [LanguageSelection]
+    }
+
+    private struct HistorySectionsRequest: Encodable {
+        let items: [HistoryItemReduction]
+        let searchText: String
+        let nowTimestampMs: Int64
+        let utcOffsetSeconds: Int32
     }
 
     private struct SummarizeHotkeyStartResponse: Decodable {
@@ -149,6 +198,10 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
     private var freeString: FreeString?
     private var prepareTriggerFunction: JSONCall?
     private var resolveCapabilitiesFunction: JSONCall?
+    private var resolveSelectionFunction: JSONCall?
+    private var resolveProviderModelSelectionFunction: JSONCall?
+    private var buildHistorySectionsFunction: JSONCall?
+    private var reduceProviderDiagnosticsFunction: JSONCall?
     private var summarizeTriggerStateFunction: JSONCall?
     private var handleInputEventFunction: JSONCall?
     private var resolveStyleContextFunction: JSONCall?
@@ -204,6 +257,125 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
                 availability: availability,
                 readiness: readiness
             )
+        }
+        return response
+    }
+
+    func resolveSelection(
+        storedProvider: ProviderID,
+        fallbackOrder: [ProviderID],
+        capabilities: [ProviderID: CapabilityStatus],
+        preferredLanguages: ProviderLanguageSettings,
+        appleInstalledLanguages: [LanguageSelection]
+    ) -> SharedCoreSelectionResolution {
+        guard let response: SharedCoreSelectionResolution = call(
+            function: resolveSelectionFunction,
+            request: SelectionResolutionRequest(
+                storedProvider: storedProvider,
+                fallbackOrder: fallbackOrder,
+                capabilities: capabilities,
+                preferredLanguages: preferredLanguages,
+                appleInstalledLanguages: appleInstalledLanguages
+            ),
+            decode: SharedCoreSelectionResolution.self
+        ) else {
+            return fallback.resolveSelection(
+                storedProvider: storedProvider,
+                fallbackOrder: fallbackOrder,
+                capabilities: capabilities,
+                preferredLanguages: preferredLanguages,
+                appleInstalledLanguages: appleInstalledLanguages
+            )
+        }
+        return response
+    }
+
+    func resolveProviderModelSelection(
+        selectedProvider: ProviderID,
+        selectedWhisperModelID: String,
+        selectedParakeetModelID: String,
+        whisperStatuses: [ProviderModelStatusInput],
+        parakeetStatuses: [ProviderModelStatusInput],
+        appleInstalledLanguages: [LanguageSelection]
+    ) -> ProviderModelSelectionResolution {
+        guard let response: ProviderModelSelectionResolution = call(
+            function: resolveProviderModelSelectionFunction,
+            request: ProviderModelSelectionRequest(
+                selectedProvider: selectedProvider,
+                selectedWhisperModelID: selectedWhisperModelID,
+                selectedParakeetModelID: selectedParakeetModelID,
+                whisperStatuses: whisperStatuses,
+                parakeetStatuses: parakeetStatuses,
+                appleInstalledLanguages: appleInstalledLanguages
+            ),
+            decode: ProviderModelSelectionResolution.self
+        ) else {
+            return fallback.resolveProviderModelSelection(
+                selectedProvider: selectedProvider,
+                selectedWhisperModelID: selectedWhisperModelID,
+                selectedParakeetModelID: selectedParakeetModelID,
+                whisperStatuses: whisperStatuses,
+                parakeetStatuses: parakeetStatuses,
+                appleInstalledLanguages: appleInstalledLanguages
+            )
+        }
+        return response
+    }
+
+    func buildHistorySections(
+        items: [HistoryItem],
+        searchText: String,
+        now: Date
+    ) -> [HistoryDaySection] {
+        let payloadItems = items.map {
+            HistoryItemReduction(
+                id: $0.id,
+                timestampMs: Int64($0.timestamp.timeIntervalSince1970 * 1000),
+                provider: $0.provider,
+                language: $0.language,
+                originalText: $0.originalText,
+                finalPastedText: $0.finalPastedText,
+                error: $0.error
+            )
+        }
+        guard let response: [HistorySectionReduction] = call(
+            function: buildHistorySectionsFunction,
+            request: HistorySectionsRequest(
+                items: payloadItems,
+                searchText: searchText,
+                nowTimestampMs: Int64(now.timeIntervalSince1970 * 1000),
+                utcOffsetSeconds: Int32(TimeZone.current.secondsFromGMT(for: now))
+            ),
+            decode: [HistorySectionReduction].self
+        ) else {
+            return fallback.buildHistorySections(items: items, searchText: searchText, now: now)
+        }
+        return response.map { section in
+            HistoryDaySection(
+                bucketDate: Date(timeIntervalSince1970: TimeInterval(section.bucketTimestampMs) / 1000),
+                title: section.title,
+                items: section.items.map { item in
+                    HistoryItem(
+                        id: item.id,
+                        timestamp: Date(timeIntervalSince1970: TimeInterval(item.timestampMs) / 1000),
+                        provider: item.provider,
+                        language: item.language,
+                        originalText: item.originalText,
+                        finalPastedText: item.finalPastedText,
+                        error: item.error
+                    )
+                }
+            )
+        }
+    }
+
+    func reduceProviderDiagnostics(_ inputs: [ProviderDiagnosticInput]) -> [ProviderDiagnosticReduction] {
+        guard let response: [ProviderDiagnosticReduction] = call(
+            function: reduceProviderDiagnosticsFunction,
+            request: ProviderDiagnosticsRequest(inputs: inputs),
+            decode: [ProviderDiagnosticReduction].self
+        ) else {
+            return fallback.reduceProviderDiagnostics(inputs)
         }
         return response
     }
@@ -276,6 +448,10 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
             freeString = resolveSymbol(named: "verbatim_core_free_string", in: handle, as: FreeString.self)
             prepareTriggerFunction = resolveSymbol(named: "verbatim_core_prepare_trigger", in: handle, as: JSONCall.self)
             resolveCapabilitiesFunction = resolveSymbol(named: "verbatim_core_resolve_capabilities", in: handle, as: JSONCall.self)
+            resolveSelectionFunction = resolveSymbol(named: "verbatim_core_resolve_selection", in: handle, as: JSONCall.self)
+            resolveProviderModelSelectionFunction = resolveSymbol(named: "verbatim_core_resolve_provider_model_selection", in: handle, as: JSONCall.self)
+            buildHistorySectionsFunction = resolveSymbol(named: "verbatim_core_build_history_sections", in: handle, as: JSONCall.self)
+            reduceProviderDiagnosticsFunction = resolveSymbol(named: "verbatim_core_reduce_provider_diagnostics", in: handle, as: JSONCall.self)
             summarizeTriggerStateFunction = resolveSymbol(named: "verbatim_core_summarize_trigger_state", in: handle, as: JSONCall.self)
             handleInputEventFunction = resolveSymbol(named: "verbatim_core_handle_input_event", in: handle, as: JSONCall.self)
             resolveStyleContextFunction = resolveSymbol(named: "verbatim_core_resolve_style_context", in: handle, as: JSONCall.self)
@@ -292,6 +468,10 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
             if engineHandle != nil,
                prepareTriggerFunction != nil,
                resolveCapabilitiesFunction != nil,
+               resolveSelectionFunction != nil,
+               resolveProviderModelSelectionFunction != nil,
+               buildHistorySectionsFunction != nil,
+               reduceProviderDiagnosticsFunction != nil,
                summarizeTriggerStateFunction != nil,
                handleInputEventFunction != nil,
                resolveStyleContextFunction != nil,
@@ -420,6 +600,98 @@ private final class SharedCoreFallback {
                 fallbackOrder: fallbackOrder
             )
         )
+    }
+
+    func reduceProviderDiagnostics(_ inputs: [ProviderDiagnosticInput]) -> [ProviderDiagnosticReduction] {
+        inputs.map { input in
+            let lastError = input.runtimeError
+                ?? (input.readiness.isReady ? nil : input.readiness.message)
+                ?? (input.availability.isAvailable ? nil : input.availability.reason)
+            let runtimeState = input.runtimeStateLabel ?? "System Managed"
+            let readiness = input.readiness.isReady ? "Ready" : input.readiness.message
+            return ProviderDiagnosticReduction(
+                provider: input.provider,
+                lastError: lastError,
+                summaryLine: "\(input.provider.title): \(input.capability.kind.title) • \(runtimeState) • \(readiness)"
+            )
+        }
+    }
+
+    func resolveSelection(
+        storedProvider: ProviderID,
+        fallbackOrder: [ProviderID],
+        capabilities: [ProviderID: CapabilityStatus],
+        preferredLanguages: ProviderLanguageSettings,
+        appleInstalledLanguages: [LanguageSelection]
+    ) -> SharedCoreSelectionResolution {
+        let effectiveProvider: ProviderID
+        if capabilities[storedProvider]?.isSupported == true {
+            effectiveProvider = storedProvider
+        } else if let availableFallback = fallbackOrder.first(where: { capabilities[$0]?.isAvailable == true }) {
+            effectiveProvider = availableFallback
+        } else if let supportedFallback = fallbackOrder.first(where: { capabilities[$0]?.isSupported == true }) {
+            effectiveProvider = supportedFallback
+        } else {
+            effectiveProvider = storedProvider
+        }
+
+        var effectiveLanguages = preferredLanguages
+        if preferredLanguages.appleSpeechID == LanguageSelection.auto.identifier {
+            effectiveLanguages.appleSpeechID = appleInstalledLanguages.first?.identifier ?? "en-US"
+        }
+
+        let effectiveProviderMessage: String?
+        if effectiveProvider == storedProvider {
+            effectiveProviderMessage = nil
+        } else {
+            let detail = capabilities[storedProvider]?.reason ?? "\(storedProvider.title) is unavailable on this system."
+            effectiveProviderMessage = "\(detail) Verbatim will use \(effectiveProvider.title) while this preference is unavailable."
+        }
+
+        return SharedCoreSelectionResolution(
+            effectiveProvider: effectiveProvider,
+            effectiveLanguages: effectiveLanguages,
+            effectiveProviderMessage: effectiveProviderMessage
+        )
+    }
+
+    func resolveProviderModelSelection(
+        selectedProvider: ProviderID,
+        selectedWhisperModelID: String,
+        selectedParakeetModelID: String,
+        whisperStatuses: [ProviderModelStatusInput],
+        parakeetStatuses: [ProviderModelStatusInput],
+        appleInstalledLanguages: [LanguageSelection]
+    ) -> ProviderModelSelectionResolution {
+        let currentLanguageOptions: [LanguageSelection]
+        switch selectedProvider {
+        case .whisper:
+            currentLanguageOptions = [.auto, .init(identifier: "en-US"), .init(identifier: "es-ES"), .init(identifier: "fr-FR"), .init(identifier: "de-DE"), .init(identifier: "ja-JP")]
+        case .parakeet:
+            let ids = Set(parakeetStatuses.first(where: { $0.id == selectedParakeetModelID })?.supportedLanguageIDs ?? [])
+            currentLanguageOptions = [.auto] + ids.sorted().map(LanguageSelection.init(identifier:))
+        case .appleSpeech:
+            currentLanguageOptions = appleInstalledLanguages.isEmpty ? [.init(identifier: "en-US"), .init(identifier: "es-ES"), .init(identifier: "fr-FR")] : appleInstalledLanguages
+        }
+
+        let selectedWhisper = whisperStatuses.first(where: { $0.id == selectedWhisperModelID })
+        let selectedParakeet = parakeetStatuses.first(where: { $0.id == selectedParakeetModelID })
+
+        return ProviderModelSelectionResolution(
+            currentLanguageOptions: currentLanguageOptions,
+            selectedWhisperDescription: selectedWhisper?.name ?? selectedWhisperModelID,
+            selectedWhisperInstalled: selectedWhisper?.isInstalled == true,
+            selectedParakeetDescription: selectedParakeet?.name ?? selectedParakeetModelID,
+            selectedParakeetInstalled: selectedParakeet?.isInstalled == true
+        )
+    }
+
+    func buildHistorySections(
+        items: [HistoryItem],
+        searchText: String,
+        now: Date
+    ) -> [HistoryDaySection] {
+        HistorySectionBuilder.build(items: items, searchText: searchText, now: now)
     }
 
     func summarizeTriggerState(

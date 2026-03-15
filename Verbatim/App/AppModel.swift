@@ -72,8 +72,18 @@ final class AppModel: ObservableObject {
     @Published var providerAvailability: [ProviderID: ProviderAvailability] = [:]
     @Published var providerReadiness: [ProviderID: ProviderReadiness] = [:]
     @Published var providerDiagnostics: [ProviderDiagnosticStatus] = []
+    @Published var providerDiagnosticSummaryLines: [ProviderID: String] = [:]
     @Published var appleInstalledLanguages: [LanguageSelection] = []
     @Published var resolvedEffectiveProvider: ProviderID?
+    @Published var resolvedEffectiveProviderMessage: String?
+    @Published var resolvedEffectiveLanguages: ProviderLanguageSettings
+    @Published var resolvedProviderModelSelection = ProviderModelSelectionResolution(
+        currentLanguageOptions: [.auto],
+        selectedWhisperDescription: "",
+        selectedWhisperInstalled: false,
+        selectedParakeetDescription: "",
+        selectedParakeetInstalled: false
+    )
     @Published var isPreparing = false
     @Published var isCapturingHotkey = false
     @Published var inlineStatusMessage: InlineStatusMessage?
@@ -118,6 +128,7 @@ final class AppModel: ObservableObject {
         self.selectedAppTab = settingsStore.settings.lastAppTab
         self.selectedSettingsTab = settingsStore.settings.lastSettingsTab
         self.systemProfile = .current
+        self.resolvedEffectiveLanguages = settingsStore.settings.preferredLanguages
         let historyStore = HistoryStore(paths: paths)
         self.historyStore = historyStore
         self.permissionsManager = PermissionsManager()
@@ -217,12 +228,7 @@ final class AppModel: ObservableObject {
     }
 
     func startRecording() async {
-        let granted: Bool
-        if permissionsManager.microphoneAuthorized {
-            granted = true
-        } else {
-            granted = await permissionsManager.requestMicrophone()
-        }
+        let granted = await DictationSessionCoordinator.ensureMicrophoneAccess(with: permissionsManager)
         guard granted else {
             applyOverlayStatus(.error("Microphone required"))
             inlineStatusMessage = InlineStatusMessage(text: "Microphone access is required before dictation can start.", tone: .warning)
@@ -230,12 +236,16 @@ final class AppModel: ObservableObject {
         }
 
         do {
-            let activeContext = activeAppContextService.currentContext()
-            let styleDecision = sharedCore.resolveStyleDecision(context: activeContext, settings: settings.styleSettings)
-            latestActiveAppContext = activeContext
-            latestStyleEvent = styleDecision
+            let start = try await DictationSessionCoordinator.start(
+                provider: effectiveProvider,
+                settings: settings,
+                activeAppContextService: activeAppContextService,
+                sharedCore: sharedCore,
+                coordinator: coordinator
+            )
+            latestActiveAppContext = start.activeContext
+            latestStyleEvent = start.styleDecision
             latestPasteDiagnostic = nil
-            try await coordinator.startRecording(provider: effectiveProvider, activeContext: activeContext, styleDecision: styleDecision)
             applyOverlayStatus(.recording)
         } catch {
             applyOverlayStatus(.error(error.localizedDescription))
@@ -246,11 +256,12 @@ final class AppModel: ObservableObject {
     func stopRecordingAndTranscribe() async {
         applyOverlayStatus(.processing)
         do {
-            let outcome = try await coordinator.stopRecordingAndTranscribe(
+            let outcome = try await DictationSessionCoordinator.stop(
                 provider: effectiveProvider,
                 language: effectiveLanguage,
                 dictionaryEntries: dictionaryEntries,
-                accessibilityGranted: permissionsManager.accessibilityAuthorized
+                accessibilityGranted: permissionsManager.accessibilityAuthorized,
+                coordinator: coordinator
             )
             historyItems.insert(outcome.historyItem, at: 0)
             latestStyleEvent = outcome.styleEvent
@@ -566,15 +577,7 @@ final class AppModel: ObservableObject {
     }
 
     var currentLanguageOptions: [LanguageSelection] {
-        switch settings.selectedProvider {
-        case .whisper:
-            return [.auto, .init(identifier: "en-US"), .init(identifier: "es-ES"), .init(identifier: "fr-FR"), .init(identifier: "de-DE"), .init(identifier: "ja-JP")]
-        case .parakeet:
-            let ids = Set(parakeetModelStatuses.first(where: { $0.descriptor.id == settings.selectedParakeetModelID })?.descriptor.supportedLanguageIDs ?? [])
-            return [.auto] + ids.sorted().map(LanguageSelection.init(identifier:))
-        case .appleSpeech:
-            return appleInstalledLanguages.isEmpty ? [.init(identifier: "en-US"), .init(identifier: "es-ES"), .init(identifier: "fr-FR")] : appleInstalledLanguages
-        }
+        resolvedProviderModelSelection.currentLanguageOptions
     }
 
     func providerStatus(for provider: ProviderID) -> ProviderReadiness {
@@ -625,24 +628,16 @@ final class AppModel: ObservableObject {
     }
 
     var effectiveProviderMessage: String? {
-        guard effectiveProvider != settings.selectedProvider else { return nil }
-        let capability = providerCapability(for: settings.selectedProvider)
-        let detail = capability.reason ?? "\(settings.selectedProvider.title) is unavailable on this system."
-        return "\(detail) Verbatim will use \(effectiveProvider.title) while this preference is unavailable."
+        resolvedEffectiveProviderMessage
     }
 
     var supportDiagnosticsSummary: String {
-        (["Provider prewarm: \(providerPrewarmStatusMessage)"] + diagnosticProviderOrder.compactMap { provider in
-            guard let diagnostic = providerDiagnostic(for: provider) else { return nil }
-            let runtimeState = diagnostic.runtimeSnapshot?.state.rawValue.capitalized ?? "System Managed"
-            let readiness = diagnostic.readiness.kind == .ready ? "Ready" : diagnostic.readiness.message
-            return "\(provider.title): \(diagnostic.capability.kind.title) • \(runtimeState) • \(readiness)"
-        })
+        (["Provider prewarm: \(providerPrewarmStatusMessage)"] + diagnosticProviderOrder.compactMap { providerDiagnosticSummaryLines[$0] })
         .joined(separator: "\n")
     }
 
     var filteredHistorySections: [HistoryDaySection] {
-        HistorySectionBuilder.build(items: historyItems, searchText: homeSearchText)
+        sharedCore.buildHistorySections(items: historyItems, searchText: homeSearchText, now: .now)
     }
 
     private func reloadLocalState() {
@@ -655,42 +650,39 @@ final class AppModel: ObservableObject {
     }
 
     private func refreshProviderState() async {
-        systemProfile = .current
-        let providers: [ProviderID: any TranscriptionProvider] = [
-            .appleSpeech: appleProvider,
-            .whisper: whisperProvider,
-            .parakeet: parakeetProvider,
-        ]
-        var availability: [ProviderID: ProviderAvailability] = [:]
-        var readiness: [ProviderID: ProviderReadiness] = [:]
-        var capabilities: [ProviderID: CapabilityStatus] = [:]
-
-        for (providerID, provider) in providers {
-            availability[providerID] = await provider.availability()
-            readiness[providerID] = await provider.readiness(for: settings.preferredLanguage(for: providerID))
-        }
-        let installedLanguages = await appleProvider.installedLanguages()
-        let capabilityResolution = sharedCore.resolveCapabilities(
-            manifest: CapabilityManifestRepository.load(),
-            profile: systemProfile,
-            storedProvider: settings.selectedProvider,
-            fallbackOrder: providerFallbackOrder,
-            availability: availability,
-            readiness: readiness
+        let result = await ProviderStateCoordinator.refresh(
+            settings: settings,
+            systemProfile: .current,
+            capabilityManifest: CapabilityManifestRepository.load(),
+            providerFallbackOrder: providerFallbackOrder,
+            sharedCore: sharedCore,
+            providers: [
+                .appleSpeech: appleProvider,
+                .whisper: whisperProvider,
+                .parakeet: parakeetProvider,
+            ],
+            appleProvider: appleProvider,
+            whisperModelManager: whisperModelManager,
+            parakeetModelManager: parakeetModelManager,
+            whisperRuntimeManager: whisperRuntimeManager,
+            parakeetRuntimeManager: parakeetRuntimeManager
         )
-        capabilities = capabilityResolution.providerCapabilities
-        appleInstalledLanguages = installedLanguages
-        providerAvailability = availability
-        providerReadiness = readiness
-        providerCapabilities = capabilities
-        featureCapabilities = capabilityResolution.featureCapabilities
-        resolvedEffectiveProvider = capabilityResolution.effectiveProvider
-        await refreshDiagnostics(
-            capabilities: capabilities,
-            availability: availability,
-            readiness: readiness,
-            appleLanguages: installedLanguages
-        )
+        systemProfile = result.systemProfile
+        whisperModelStatuses = result.whisperModelStatuses
+        parakeetModelStatuses = result.parakeetModelStatuses
+        appleInstalledLanguages = result.appleInstalledLanguages
+        providerAvailability = result.providerAvailability
+        providerReadiness = result.providerReadiness
+        providerCapabilities = result.providerCapabilities
+        featureCapabilities = result.featureCapabilities
+        resolvedEffectiveProvider = result.selectionResolution.effectiveProvider
+        resolvedEffectiveProviderMessage = result.selectionResolution.effectiveProviderMessage
+        resolvedEffectiveLanguages = result.selectionResolution.effectiveLanguages
+        resolvedProviderModelSelection = result.modelSelectionResolution
+        providerDiagnostics = result.providerDiagnostics
+        providerDiagnosticSummaryLines = result.providerDiagnosticSummaryLines
+        diagnosticsLogger.info("Refreshed provider diagnostics")
+        logStore.append("Refreshed provider diagnostics", category: .diagnostics)
     }
 
     private func configureHotkey() {
@@ -811,70 +803,6 @@ final class AppModel: ObservableObject {
         [.whisper, .parakeet, .appleSpeech]
     }
 
-    private func refreshDiagnostics(
-        capabilities: [ProviderID: CapabilityStatus],
-        availability: [ProviderID: ProviderAvailability],
-        readiness: [ProviderID: ProviderReadiness],
-        appleLanguages: [LanguageSelection]
-    ) async {
-        let whisperStatuses = await whisperModelManager.statuses()
-        let parakeetStatuses = await parakeetModelManager.statuses()
-        let whisperSnapshot = await whisperRuntimeManager.snapshot()
-        let parakeetSnapshot = await parakeetRuntimeManager.snapshot()
-
-        let selectedWhisper = whisperStatuses.first(where: { $0.id == settings.selectedWhisperModelID })
-        let selectedParakeet = parakeetStatuses.first(where: { $0.id == settings.selectedParakeetModelID })
-        let whisperLastError = whisperSnapshot.lastError
-            ?? (readiness[.whisper]?.isReady == true ? nil : readiness[.whisper]?.message)
-            ?? (availability[.whisper]?.isAvailable == true ? nil : availability[.whisper]?.reason)
-        let parakeetLastError = parakeetSnapshot.lastError
-            ?? (readiness[.parakeet]?.isReady == true ? nil : readiness[.parakeet]?.message)
-            ?? (availability[.parakeet]?.isAvailable == true ? nil : availability[.parakeet]?.reason)
-        let appleLastError = (readiness[.appleSpeech]?.isReady == true ? nil : readiness[.appleSpeech]?.message)
-            ?? (availability[.appleSpeech]?.isAvailable == true ? nil : availability[.appleSpeech]?.reason)
-
-        providerDiagnostics = [
-            ProviderDiagnosticStatus(
-                provider: .whisper,
-                capability: capabilities[.whisper] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
-                availability: availability[.whisper] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
-                readiness: readiness[.whisper] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
-                selectionDescription: selectedWhisper?.descriptor.name ?? settings.selectedWhisperModelID,
-                selectionInstalled: selectedWhisper?.state == .ready,
-                selectionSource: await whisperModelManager.installSource(for: settings.selectedWhisperModelID),
-                runtimeSnapshot: whisperSnapshot,
-                lastCheck: whisperSnapshot.lastCheck ?? .now,
-                lastError: whisperLastError
-            ),
-            ProviderDiagnosticStatus(
-                provider: .parakeet,
-                capability: capabilities[.parakeet] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
-                availability: availability[.parakeet] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
-                readiness: readiness[.parakeet] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
-                selectionDescription: selectedParakeet?.descriptor.name ?? settings.selectedParakeetModelID,
-                selectionInstalled: selectedParakeet?.state == .ready,
-                selectionSource: await parakeetModelManager.installSource(for: settings.selectedParakeetModelID),
-                runtimeSnapshot: parakeetSnapshot,
-                lastCheck: parakeetSnapshot.lastCheck ?? .now,
-                lastError: parakeetLastError
-            ),
-            ProviderDiagnosticStatus(
-                provider: .appleSpeech,
-                capability: capabilities[.appleSpeech] ?? CapabilityStatus(kind: .supportedButNotReady, reason: "Checking capability state…", actionTitle: nil),
-                availability: availability[.appleSpeech] ?? ProviderAvailability(isAvailable: false, reason: "Checking…"),
-                readiness: readiness[.appleSpeech] ?? ProviderReadiness(kind: .unavailable, message: "Checking…", actionTitle: nil),
-                selectionDescription: settings.preferredLanguage(for: .appleSpeech).title,
-                selectionInstalled: settings.preferredLanguage(for: .appleSpeech).isAuto == false && appleLanguages.contains(settings.preferredLanguage(for: .appleSpeech)),
-                selectionSource: nil,
-                runtimeSnapshot: nil,
-                lastCheck: .now,
-                lastError: appleLastError
-            ),
-        ]
-        diagnosticsLogger.info("Refreshed provider diagnostics")
-        logStore.append("Refreshed provider diagnostics", category: .diagnostics)
-    }
-
     private func diagnosticsReport() -> String {
         var lines: [String] = [
             "Verbatim Diagnostics",
@@ -947,15 +875,6 @@ final class AppModel: ObservableObject {
     }
 
     private func effectiveLanguageForProvider(_ provider: ProviderID) -> LanguageSelection {
-        let preferred = settings.preferredLanguage(for: provider)
-        switch provider {
-        case .appleSpeech:
-            if preferred.isAuto == false {
-                return preferred
-            }
-            return appleInstalledLanguages.first ?? LanguageSelection(identifier: "en-US")
-        case .whisper, .parakeet:
-            return preferred
-        }
+        resolvedEffectiveLanguages.language(for: provider)
     }
 }

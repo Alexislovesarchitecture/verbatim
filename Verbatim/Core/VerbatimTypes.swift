@@ -695,12 +695,12 @@ enum RuntimeState: String, Equatable, Sendable {
     case failed
 }
 
-struct ProviderAvailability: Equatable, Sendable {
+struct ProviderAvailability: Equatable, Codable, Sendable {
     var isAvailable: Bool
     var reason: String?
 }
 
-enum ProviderReadinessKind: String, Equatable, Sendable {
+enum ProviderReadinessKind: String, Equatable, Codable, Sendable {
     case ready
     case missingLanguage
     case missingModel
@@ -711,7 +711,7 @@ enum ProviderReadinessKind: String, Equatable, Sendable {
     case binaryMissing
 }
 
-struct ProviderReadiness: Equatable, Sendable {
+struct ProviderReadiness: Equatable, Codable, Sendable {
     var kind: ProviderReadinessKind
     var message: String
     var actionTitle: String?
@@ -915,6 +915,58 @@ struct SharedCoreCapabilityResolution: Equatable, Codable, Sendable {
     var providerCapabilities: [ProviderID: CapabilityStatus]
     var featureCapabilities: [FeatureID: CapabilityStatus]
     var effectiveProvider: ProviderID
+}
+
+struct SharedCoreSelectionResolution: Equatable, Codable, Sendable {
+    var effectiveProvider: ProviderID
+    var effectiveLanguages: ProviderLanguageSettings
+    var effectiveProviderMessage: String?
+}
+
+struct HistoryItemReduction: Equatable, Codable, Sendable {
+    var id: Int64
+    var timestampMs: Int64
+    var provider: String
+    var language: String
+    var originalText: String
+    var finalPastedText: String
+    var error: String?
+}
+
+struct HistorySectionReduction: Equatable, Codable, Sendable {
+    var bucketTimestampMs: Int64
+    var title: String
+    var items: [HistoryItemReduction]
+}
+
+struct ProviderModelStatusInput: Equatable, Codable, Sendable {
+    var id: String
+    var name: String
+    var supportedLanguageIDs: [String]
+    var isInstalled: Bool
+}
+
+struct ProviderModelSelectionResolution: Equatable, Codable, Sendable {
+    var currentLanguageOptions: [LanguageSelection]
+    var selectedWhisperDescription: String
+    var selectedWhisperInstalled: Bool
+    var selectedParakeetDescription: String
+    var selectedParakeetInstalled: Bool
+}
+
+struct ProviderDiagnosticInput: Equatable, Codable, Sendable {
+    var provider: ProviderID
+    var capability: CapabilityStatus
+    var availability: ProviderAvailability
+    var readiness: ProviderReadiness
+    var runtimeStateLabel: String?
+    var runtimeError: String?
+}
+
+struct ProviderDiagnosticReduction: Equatable, Codable, Sendable {
+    var provider: ProviderID
+    var lastError: String?
+    var summaryLine: String
 }
 
 struct DictionaryEntry: Identifiable, Equatable, Codable, Sendable {

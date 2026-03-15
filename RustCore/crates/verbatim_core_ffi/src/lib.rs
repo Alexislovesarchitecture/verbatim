@@ -221,6 +221,122 @@ struct CapabilityResolutionResponse {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LanguageSelection {
+    identifier: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderLanguageSettings {
+    apple_speech_id: String,
+    whisper_id: String,
+    parakeet_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionResolutionRequest {
+    stored_provider: ProviderID,
+    fallback_order: Vec<ProviderID>,
+    capabilities: HashMap<ProviderID, CapabilityStatus>,
+    preferred_languages: ProviderLanguageSettings,
+    apple_installed_languages: Vec<LanguageSelection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionResolutionResponse {
+    effective_provider: ProviderID,
+    effective_languages: ProviderLanguageSettings,
+    effective_provider_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelStatusInput {
+    id: String,
+    name: String,
+    supported_language_ids: Vec<String>,
+    is_installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelSelectionRequest {
+    selected_provider: ProviderID,
+    selected_whisper_model_id: String,
+    selected_parakeet_model_id: String,
+    whisper_statuses: Vec<ProviderModelStatusInput>,
+    parakeet_statuses: Vec<ProviderModelStatusInput>,
+    apple_installed_languages: Vec<LanguageSelection>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderModelSelectionResponse {
+    current_language_options: Vec<LanguageSelection>,
+    selected_whisper_description: String,
+    selected_whisper_installed: bool,
+    selected_parakeet_description: String,
+    selected_parakeet_installed: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistoryItemReduction {
+    id: i64,
+    timestamp_ms: i64,
+    provider: String,
+    language: String,
+    original_text: String,
+    final_pasted_text: String,
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistorySectionReduction {
+    bucket_timestamp_ms: i64,
+    title: String,
+    items: Vec<HistoryItemReduction>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HistorySectionsRequest {
+    items: Vec<HistoryItemReduction>,
+    search_text: String,
+    now_timestamp_ms: i64,
+    utc_offset_seconds: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderDiagnosticInput {
+    provider: ProviderID,
+    capability: CapabilityStatus,
+    availability: ProviderAvailability,
+    readiness: ProviderReadiness,
+    runtime_state_label: Option<String>,
+    runtime_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderDiagnosticReduction {
+    provider: ProviderID,
+    last_error: Option<String>,
+    summary_line: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderDiagnosticsRequest {
+    inputs: Vec<ProviderDiagnosticInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum InputEvent {
     TriggerDown,
@@ -448,6 +564,34 @@ pub extern "C" fn verbatim_core_resolve_capabilities(engine: *mut c_void, reques
             provider_capabilities,
             feature_capabilities,
         })
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn verbatim_core_resolve_selection(engine: *mut c_void, request_json: *const c_char) -> *mut c_char {
+    respond(engine, request_json, |_engine, request: SelectionResolutionRequest| {
+        Ok(resolve_selection_response(request))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn verbatim_core_resolve_provider_model_selection(engine: *mut c_void, request_json: *const c_char) -> *mut c_char {
+    respond(engine, request_json, |_engine, request: ProviderModelSelectionRequest| {
+        Ok(resolve_provider_model_selection(request))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn verbatim_core_build_history_sections(engine: *mut c_void, request_json: *const c_char) -> *mut c_char {
+    respond(engine, request_json, |_engine, request: HistorySectionsRequest| {
+        Ok(build_history_sections(request))
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn verbatim_core_reduce_provider_diagnostics(engine: *mut c_void, request_json: *const c_char) -> *mut c_char {
+    respond(engine, request_json, |_engine, request: ProviderDiagnosticsRequest| {
+        Ok(reduce_provider_diagnostics(request.inputs))
     })
 }
 
@@ -770,6 +914,236 @@ fn provider_title(provider: &ProviderID) -> &'static str {
         ProviderID::AppleSpeech => "Apple Speech",
         ProviderID::Whisper => "Whisper",
         ProviderID::Parakeet => "Parakeet",
+    }
+}
+
+fn capability_title(kind: &CapabilityStatusKind) -> &'static str {
+    match kind {
+        CapabilityStatusKind::Available => "Available",
+        CapabilityStatusKind::Unsupported => "Unsupported",
+        CapabilityStatusKind::SupportedButNotReady => "Needs Setup",
+    }
+}
+
+fn resolve_selection_response(request: SelectionResolutionRequest) -> SelectionResolutionResponse {
+    let effective_provider = effective_provider(
+        &request.stored_provider,
+        &request.capabilities,
+        &request.fallback_order,
+    );
+
+    let mut effective_languages = request.preferred_languages.clone();
+    if effective_languages.apple_speech_id == "auto" {
+        effective_languages.apple_speech_id = request
+            .apple_installed_languages
+            .first()
+            .map(|language| language.identifier.clone())
+            .unwrap_or_else(|| "en-US".to_string());
+    }
+
+    let effective_provider_message = if effective_provider == request.stored_provider {
+        None
+    } else {
+        let detail = request
+            .capabilities
+            .get(&request.stored_provider)
+            .and_then(|capability| capability.reason.clone())
+            .unwrap_or_else(|| format!("{} is unavailable on this system.", provider_title(&request.stored_provider)));
+        Some(format!(
+            "{} Verbatim will use {} while this preference is unavailable.",
+            detail,
+            provider_title(&effective_provider)
+        ))
+    };
+
+    SelectionResolutionResponse {
+        effective_provider,
+        effective_languages,
+        effective_provider_message,
+    }
+}
+
+fn resolve_provider_model_selection(request: ProviderModelSelectionRequest) -> ProviderModelSelectionResponse {
+    let current_language_options = match request.selected_provider {
+        ProviderID::Whisper => vec![
+            LanguageSelection { identifier: "auto".to_string() },
+            LanguageSelection { identifier: "en-US".to_string() },
+            LanguageSelection { identifier: "es-ES".to_string() },
+            LanguageSelection { identifier: "fr-FR".to_string() },
+            LanguageSelection { identifier: "de-DE".to_string() },
+            LanguageSelection { identifier: "ja-JP".to_string() },
+        ],
+        ProviderID::Parakeet => {
+            let mut ids = request
+                .parakeet_statuses
+                .iter()
+                .find(|status| status.id == request.selected_parakeet_model_id)
+                .map(|status| status.supported_language_ids.clone())
+                .unwrap_or_default();
+            ids.sort();
+            ids.dedup();
+            let mut languages = vec![LanguageSelection { identifier: "auto".to_string() }];
+            languages.extend(ids.into_iter().map(|identifier| LanguageSelection { identifier }));
+            languages
+        }
+        ProviderID::AppleSpeech => {
+            if request.apple_installed_languages.is_empty() {
+                vec![
+                    LanguageSelection { identifier: "en-US".to_string() },
+                    LanguageSelection { identifier: "es-ES".to_string() },
+                    LanguageSelection { identifier: "fr-FR".to_string() },
+                ]
+            } else {
+                request.apple_installed_languages.clone()
+            }
+        }
+    };
+
+    let selected_whisper = request
+        .whisper_statuses
+        .iter()
+        .find(|status| status.id == request.selected_whisper_model_id);
+    let selected_parakeet = request
+        .parakeet_statuses
+        .iter()
+        .find(|status| status.id == request.selected_parakeet_model_id);
+
+    ProviderModelSelectionResponse {
+        current_language_options,
+        selected_whisper_description: selected_whisper
+            .map(|status| status.name.clone())
+            .unwrap_or(request.selected_whisper_model_id),
+        selected_whisper_installed: selected_whisper.map(|status| status.is_installed).unwrap_or(false),
+        selected_parakeet_description: selected_parakeet
+            .map(|status| status.name.clone())
+            .unwrap_or(request.selected_parakeet_model_id),
+        selected_parakeet_installed: selected_parakeet.map(|status| status.is_installed).unwrap_or(false),
+    }
+}
+
+fn build_history_sections(request: HistorySectionsRequest) -> Vec<HistorySectionReduction> {
+    let trimmed_search = request.search_text.trim().to_lowercase();
+    let filtered_items: Vec<HistoryItemReduction> = if trimmed_search.is_empty() {
+        request.items
+    } else {
+        request
+            .items
+            .into_iter()
+            .filter(|item| {
+                item.original_text.to_lowercase().contains(&trimmed_search)
+                    || item.final_pasted_text.to_lowercase().contains(&trimmed_search)
+            })
+            .collect()
+    };
+
+    let day_ms: i64 = 86_400_000;
+    let offset_ms = i64::from(request.utc_offset_seconds) * 1000;
+    let today_bucket = bucket_start_ms(request.now_timestamp_ms, day_ms, offset_ms);
+    let yesterday_bucket = today_bucket - day_ms;
+    let mut grouped: HashMap<i64, Vec<HistoryItemReduction>> = HashMap::new();
+    for item in filtered_items {
+        grouped
+            .entry(bucket_start_ms(item.timestamp_ms, day_ms, offset_ms))
+            .or_default()
+            .push(item);
+    }
+
+    let mut sections = grouped
+        .into_iter()
+        .map(|(bucket_timestamp_ms, mut items)| {
+            items.sort_by(|left, right| right.timestamp_ms.cmp(&left.timestamp_ms));
+            let title = if bucket_timestamp_ms == today_bucket {
+                "Today".to_string()
+            } else if bucket_timestamp_ms == yesterday_bucket {
+                "Yesterday".to_string()
+            } else {
+                format_bucket_title(bucket_timestamp_ms, offset_ms)
+            };
+            HistorySectionReduction {
+                bucket_timestamp_ms,
+                title,
+                items,
+            }
+        })
+        .collect::<Vec<_>>();
+    sections.sort_by(|left, right| right.bucket_timestamp_ms.cmp(&left.bucket_timestamp_ms));
+    sections
+}
+
+fn reduce_provider_diagnostics(inputs: Vec<ProviderDiagnosticInput>) -> Vec<ProviderDiagnosticReduction> {
+    inputs
+        .into_iter()
+        .map(|input| {
+            let last_error = input
+                .runtime_error
+                .clone()
+                .or_else(|| if input.readiness.kind == ProviderReadinessKind::Ready { None } else { Some(input.readiness.message.clone()) })
+                .or_else(|| if input.availability.is_available { None } else { input.availability.reason.clone() });
+            let runtime_state = input.runtime_state_label.unwrap_or_else(|| "System Managed".to_string());
+            let readiness = if input.readiness.kind == ProviderReadinessKind::Ready {
+                "Ready".to_string()
+            } else {
+                input.readiness.message.clone()
+            };
+            ProviderDiagnosticReduction {
+                provider: input.provider.clone(),
+                last_error,
+                summary_line: format!(
+                    "{}: {} • {} • {}",
+                    provider_title(&input.provider),
+                    capability_title(&input.capability.kind),
+                    runtime_state,
+                    readiness
+                ),
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+fn bucket_start_ms(timestamp_ms: i64, day_ms: i64, offset_ms: i64) -> i64 {
+    let shifted = timestamp_ms + offset_ms;
+    shifted - shifted.rem_euclid(day_ms) - offset_ms
+}
+
+fn format_bucket_title(bucket_timestamp_ms: i64, offset_ms: i64) -> String {
+    let (year, month, day) = local_date_parts(bucket_timestamp_ms, offset_ms);
+    format!("{} {}, {}", month_abbrev(month), day, year)
+}
+
+fn local_date_parts(timestamp_ms: i64, offset_ms: i64) -> (i32, u32, u32) {
+    let days = (timestamp_ms + offset_ms).div_euclid(86_400_000);
+    civil_from_days(days)
+}
+
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    (year as i32, m as u32, d as u32)
+}
+
+fn month_abbrev(month: u32) -> &'static str {
+    match month {
+        1 => "Jan",
+        2 => "Feb",
+        3 => "Mar",
+        4 => "Apr",
+        5 => "May",
+        6 => "Jun",
+        7 => "Jul",
+        8 => "Aug",
+        9 => "Sep",
+        10 => "Oct",
+        11 => "Nov",
+        12 => "Dec",
+        _ => "Date",
     }
 }
 
@@ -1099,5 +1473,143 @@ mod tests {
             },
         );
         assert_eq!(response, "Hello there.");
+    }
+
+    #[test]
+    fn selection_resolution_falls_back_to_available_provider() {
+        let capabilities = HashMap::from([
+            (
+                ProviderID::AppleSpeech,
+                CapabilityStatus {
+                    kind: CapabilityStatusKind::Unsupported,
+                    reason: Some("Apple Speech is unavailable on this system.".to_string()),
+                    action_title: None,
+                },
+            ),
+            (
+                ProviderID::Whisper,
+                CapabilityStatus {
+                    kind: CapabilityStatusKind::Available,
+                    reason: None,
+                    action_title: None,
+                },
+            ),
+        ]);
+        let request = SelectionResolutionRequest {
+            stored_provider: ProviderID::AppleSpeech,
+            fallback_order: vec![ProviderID::Whisper, ProviderID::Parakeet],
+            capabilities,
+            preferred_languages: ProviderLanguageSettings {
+                apple_speech_id: "auto".to_string(),
+                whisper_id: "en-US".to_string(),
+                parakeet_id: "auto".to_string(),
+            },
+            apple_installed_languages: vec![LanguageSelection { identifier: "fr-FR".to_string() }],
+        };
+
+        let response = resolve_selection_response(request);
+
+        assert_eq!(response.effective_provider, ProviderID::Whisper);
+        assert_eq!(response.effective_languages.apple_speech_id, "fr-FR");
+        assert_eq!(
+            response.effective_provider_message.as_deref(),
+            Some("Apple Speech is unavailable on this system. Verbatim will use Whisper while this preference is unavailable.")
+        );
+    }
+
+    #[test]
+    fn provider_model_selection_uses_model_metadata() {
+        let response = resolve_provider_model_selection(ProviderModelSelectionRequest {
+            selected_provider: ProviderID::Parakeet,
+            selected_whisper_model_id: "base.en".to_string(),
+            selected_parakeet_model_id: "parakeet-en".to_string(),
+            whisper_statuses: vec![ProviderModelStatusInput {
+                id: "base.en".to_string(),
+                name: "Whisper Base English".to_string(),
+                supported_language_ids: vec!["en-US".to_string()],
+                is_installed: true,
+            }],
+            parakeet_statuses: vec![ProviderModelStatusInput {
+                id: "parakeet-en".to_string(),
+                name: "Parakeet English".to_string(),
+                supported_language_ids: vec!["en-US".to_string(), "es-ES".to_string()],
+                is_installed: false,
+            }],
+            apple_installed_languages: vec![],
+        });
+
+        assert_eq!(response.selected_whisper_description, "Whisper Base English");
+        assert!(response.selected_whisper_installed);
+        assert_eq!(response.selected_parakeet_description, "Parakeet English");
+        assert!(!response.selected_parakeet_installed);
+        assert_eq!(
+            response.current_language_options,
+            vec![
+                LanguageSelection { identifier: "auto".to_string() },
+                LanguageSelection { identifier: "en-US".to_string() },
+                LanguageSelection { identifier: "es-ES".to_string() },
+            ]
+        );
+    }
+
+    #[test]
+    fn history_sections_group_and_filter_in_local_time() {
+        let sections = build_history_sections(HistorySectionsRequest {
+            items: vec![
+                HistoryItemReduction {
+                    id: 1,
+                    timestamp_ms: 1_710_000_000_000,
+                    provider: "whisper".to_string(),
+                    language: "en-US".to_string(),
+                    original_text: "First note".to_string(),
+                    final_pasted_text: "First note".to_string(),
+                    error: None,
+                },
+                HistoryItemReduction {
+                    id: 2,
+                    timestamp_ms: 1_710_086_400_000,
+                    provider: "whisper".to_string(),
+                    language: "en-US".to_string(),
+                    original_text: "Second note".to_string(),
+                    final_pasted_text: "Second note".to_string(),
+                    error: None,
+                },
+            ],
+            search_text: "second".to_string(),
+            now_timestamp_ms: 1_710_086_400_000,
+            utc_offset_seconds: 0,
+        });
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].title, "Today");
+        assert_eq!(sections[0].items.len(), 1);
+        assert_eq!(sections[0].items[0].id, 2);
+    }
+
+    #[test]
+    fn provider_diagnostic_reducer_prefers_runtime_error() {
+        let reductions = reduce_provider_diagnostics(vec![ProviderDiagnosticInput {
+            provider: ProviderID::Whisper,
+            capability: CapabilityStatus {
+                kind: CapabilityStatusKind::SupportedButNotReady,
+                reason: Some("Needs a local model.".to_string()),
+                action_title: Some("Download model".to_string()),
+            },
+            availability: ProviderAvailability {
+                is_available: true,
+                reason: None,
+            },
+            readiness: ProviderReadiness {
+                kind: ProviderReadinessKind::Installable,
+                message: "Model can be installed.".to_string(),
+                action_title: Some("Install".to_string()),
+            },
+            runtime_state_label: Some("Failed".to_string()),
+            runtime_error: Some("Socket bind failed".to_string()),
+        }]);
+
+        assert_eq!(reductions[0].last_error.as_deref(), Some("Socket bind failed"));
+        assert!(reductions[0].summary_line.contains("Whisper"));
+        assert!(reductions[0].summary_line.contains("Failed"));
     }
 }
