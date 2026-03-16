@@ -17,4 +17,8 @@ build/
 tmp/DerivedData-*/
 tmp/*-dev.app/
 RustCore/target/
-Verbatim/RustRuntime/libverbatim_core.dylib
+RustCore/dist/
+Shells/macOS/Verbatim/RustRuntime/libverbatim_core.dylib
+Shells/linux/target/
+Shells/windows/**/bin/
+Shells/windows/**/obj/

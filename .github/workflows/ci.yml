@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo test --manifest-path RustCore/Cargo.toml
+
+  macos-shell:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./scripts/build_rust_core.sh
+      - run: cd Shells/macOS && swift test
+      - run: cd Shells/macOS && swift build --product Verbatim
+
+  windows-shell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - shell: pwsh
+        run: ./Shells/windows/scripts/test.ps1
+      - shell: pwsh
+        run: ./Shells/windows/scripts/build.ps1
+
+  linux-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y pkg-config libgtk-4-dev libadwaita-1-dev libasound2-dev
+      - run: ./Shells/linux/scripts/test.sh
+      - run: ./Shells/linux/scripts/build.sh

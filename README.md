@@ -1,78 +1,74 @@
 # Verbatim
 
-Native macOS dictation app that keeps the existing Verbatim identity and visual language while replacing the old mixed backend surface with a local-only transcription stack.
+Verbatim is one desktop product with a shared Rust engine and native shells per operating system.
 
-## What’s In This Rewrite
+## Repository layout
 
-- Native SwiftUI/AppKit app shell with the existing Verbatim branding and glass styling
-- Floating overlay bubble for `idle`, `recording`, `processing`, `success`, and `error`
-- Menu bar status item for start/stop, open app, provider summary, and quit
-- Global tap-to-toggle hotkey via Carbon event hot keys
-- Local providers:
-  - Apple Speech via `SpeechAnalyzer`, `SpeechTranscriber`, and `AssetInventory`
-  - Whisper via bundled `whisper-server`
-  - Parakeet via bundled sherpa websocket runtime
-- Local history and custom dictionary stored in the existing Verbatim SQLite database location
-- Local model management for Whisper and Parakeet under Application Support
-- Clipboard fallback when Accessibility is missing
+- `RustCore/`
+  - shared Rust engine
+  - portable reducers, formatting logic, and shell contract boundary
+- `Shells/macOS/`
+  - active SwiftUI/AppKit reference shell
+- `Shells/windows/`
+  - WinUI 3 native shell scaffold
+- `Shells/linux/`
+  - GTK4/libadwaita native shell scaffold
+- `scripts/`
+  - host-aware build, test, run, and install entrypoints
+- `docs/`
+  - architecture, shell/core contract, parity notes, and release guidance
 
-## Source Layout
+## Host commands
 
-- Native shared source tree: [`Verbatim/`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim)
-- Architecture note: [`docs/architecture.md`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/docs/architecture.md)
-- Shell/core contract: [`docs/shell-core-contract.md`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/docs/shell-core-contract.md)
-- Release checklist: [`docs/release-checklist.md`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/docs/release-checklist.md)
-- App entry: [`Verbatim/App/VerbatimNativeApp.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/App/VerbatimNativeApp.swift)
-- App state/orchestration: [`Verbatim/App/AppModel.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/App/AppModel.swift)
-- Provider/runtime services: [`Verbatim/Services/TranscriptionServices.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/Services/TranscriptionServices.swift)
-- Permissions, hotkeys, overlay, paste, status item: [`Verbatim/Services/PlatformServices.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/Services/PlatformServices.swift)
-- Persistence and manifest loading: [`Verbatim/Services/StorageServices.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/Services/StorageServices.swift)
-- Main UI: [`Verbatim/Views/AppRootView.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Verbatim/Views/AppRootView.swift)
-- Tests: [`NativeTests/VerbatimNativeTests.swift`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/NativeTests/VerbatimNativeTests.swift)
-- Archived legacy app source: [`Legacy/VerbatimSwiftMVP/`](/Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/Legacy/VerbatimSwiftMVP)
-
-## Storage
-
-- App support root: `~/Library/Application Support/Verbatim`
-- History database: `~/Library/Application Support/Verbatim/transcript_history.sqlite`
-- Whisper models: `~/Library/Application Support/Verbatim/Models/Whisper`
-- Parakeet models: `~/Library/Application Support/Verbatim/Models/Parakeet`
-- Runtime binaries copied on first launch: `~/Library/Application Support/Verbatim/Runtime`
-
-On first launch, Verbatim migrates existing local data from `~/Library/Application Support/VerbatimSwiftMVP` if the new `Verbatim` root does not exist yet. It also imports still-live legacy defaults from the `VerbatimSwiftMVP.*` namespace into the current `Verbatim` settings blob.
-
-The app also attempts a one-way import of existing Electron-era model downloads from:
-
-- `~/.cache/openwhispr/whisper-models`
-- `~/.cache/openwhispr/parakeet-models`
-
-## Build
-
-SwiftPM compile/test:
+Build the current host shell:
 
 ```bash
-cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim
-swift build
-swift test
+./scripts/build_host_shell.sh
 ```
 
-Xcode target build:
+Test the current host shell:
 
 ```bash
-cd /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim
-xcodebuild -project verbatim.xcodeproj -target 'Verbatim' -configuration Debug build
+./scripts/test_host_shell.sh
 ```
 
-Open in Xcode:
+Run the current host app:
 
 ```bash
-open /Users/alexislovesarchitecture/Desktop/CodexWorkspace/verbatim/verbatim.xcodeproj
+./scripts/run_host_app.sh
 ```
 
-## Notes
+Install the current host app:
 
-- The Xcode target is configured for arm64 because the bundled local runtime binaries in this repo are arm64-only.
-- A pre-sign build phase strips extended attributes from the built app bundle so local codesigning succeeds.
-- The app target disables the macOS app sandbox because local subprocess runtimes, Accessibility paste automation, and model file management need direct local access.
-- Apple Speech requires an explicit language. Whisper and Parakeet support `auto` when the selected provider/model can handle it.
-- The app icon catalog currently contains an extra master image file that Xcode warns about during asset compilation, but it does not block builds.
+```bash
+./scripts/install_host_app.sh
+```
+
+## Reference shell
+
+The fully working shell in this repo today is the macOS shell at `Shells/macOS/`.
+
+It includes:
+
+- provider selection with capability-gated activation
+- provider-specific language persistence
+- local model management with progress, ready/error states, and inline diagnostics
+- floating overlay and menu bar integration
+- hotkey capture and Accessibility-based auto-paste
+- local history, dictionary, and style settings
+- Apple Speech, Whisper, and Parakeet provider handling with explicit platform gating
+
+## Product rules
+
+- Rust owns portable product logic and semantic state transitions.
+- Native shells own permissions, input capture, audio capture, focus/window capture, paste automation, runtime management, and UI.
+- Auto-detect means transcription without silent translation.
+- Unsupported providers and features stay visible with explicit reasons instead of disappearing.
+
+## Documentation
+
+- `docs/architecture.md`
+- `docs/shell-core-contract.md`
+- `docs/feature-parity-matrix.md`
+- `docs/retired-legacy-features.md`
+- `docs/release-checklist.md`

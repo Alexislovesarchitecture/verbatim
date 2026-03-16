@@ -1,69 +1,35 @@
-# Verbatim macOS Release Checklist
+# Verbatim Release Checklist
 
-This project is currently optimized for direct downloadable distribution, not Mac App Store distribution.
+## Core
 
-## Build and runtime
+- `cargo test --manifest-path RustCore/Cargo.toml`
+- Rust contract and FFI payloads serialize cleanly
+- staged engine artifacts exist in `RustCore/dist/`
 
-- Run `swift test`
-- Run `./scripts/build_rust_core.sh`
-- Run `swift build --product Verbatim`
-- Confirm the app bundle contains:
-  - `Contents/MacOS/Verbatim`
-  - `Contents/Resources/Verbatim_Verbatim.bundle`
-  - `Contents/Resources/RustRuntime/libverbatim_core.dylib`
-- Confirm the app launches with the bundled Rust runtime present
+## macOS shell
 
-## Signing and notarization
+- `cd Shells/macOS && swift test`
+- `cd Shells/macOS && swift build --product Verbatim`
+- dev app launches and finds bundled Rust runtime
+- Accessibility and microphone flows remain contextual
+- provider/model readiness is inline and actionable
 
-- Sign with a Developer ID Application certificate
-- Enable hardened runtime
-- Verify the app bundle signature with `codesign --verify --deep --strict`
-- Submit the app for notarization with `notarytool`
-- Staple the notarization ticket to the distributed app
-- Re-verify the stapled app before shipping
+## Windows shell
 
-## First-launch and setup
+- `pwsh -File Shells/windows/scripts/build.ps1`
+- shell launches and loads the Rust bridge
+- unsupported providers/features remain visible with reasons
 
-- Fresh-install launch succeeds
-- Accessibility onboarding is contextual and non-redundant
-- Microphone permission flow is contextual and non-redundant
-- Model/runtime readiness messaging is inline and actionable
-- Unsupported providers/features remain visible with disabled reasons
+## Linux shell
 
-## Dictation workflow
+- `cargo build --manifest-path Shells/linux/Cargo.toml`
+- shell launches and renders the main product surfaces
+- unsupported providers/features remain visible with reasons
 
-- Manual dictation button works end to end
-- `Fn / Globe` trigger works end to end
-- Recording overlay shows recording/processing/error states correctly
-- Style/context capture is visible in the Style tab
-- True auto-paste shows success UI
-- Clipboard fallback is silent
-- Focused-field restore avoids blind paste into the wrong field
+## Product behavior
 
-## Provider and model readiness
-
-- Apple Speech readiness reflects current system capability
-- Whisper runtime prewarm reflects actual runtime state
-- Missing model/runtime states are visible in diagnostics
-- Runtime restart path updates readiness state correctly
-- Per-provider language settings persist correctly across relaunch
-
-## Persistence
-
-- Settings persist across relaunch
-- History persists across relaunch
-- Dictionary persists across relaunch
-- Current provider selection and provider-specific language selection persist across relaunch
-
-## Distribution follow-up
-
-- Choose an update strategy:
-  - Sparkle
-  - explicit manual-update flow
-- Create a release checklist for:
-  - version bump
-  - changelog
-  - signing
-  - notarization
-  - smoke test
-  - upload/distribution
+- provider-specific language settings persist
+- model downloads show progress, ready state, and failure state
+- auto-detect does not silently translate
+- history and dictionary persist correctly
+- diagnostics match actual runtime state
