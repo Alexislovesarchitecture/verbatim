@@ -188,7 +188,7 @@ internal sealed class WindowsShellState
             };
             modelSelection = new ProviderModelSelectionResolution
             {
-                CurrentLanguageOptions = CurrentLanguageOptions(Settings.SelectedProvider),
+                CurrentLanguageOptions = CurrentLanguageOptions(Settings.SelectedProvider).ToList(),
                 SelectedWhisperDescription = SelectedModelDescription(ProviderIds.Whisper, Settings.SelectedWhisperModelID),
                 SelectedWhisperInstalled = modelCatalog.BuildStatuses(ProviderIds.Whisper).Any(item => item.Id == Settings.SelectedWhisperModelID && item.IsInstalled),
                 SelectedParakeetDescription = SelectedModelDescription(ProviderIds.Parakeet, Settings.SelectedParakeetModelID),

@@ -10,19 +10,19 @@ internal static class ManifestRepository
         WriteIndented = true,
     };
 
-    internal static IReadOnlyList<ModelDescriptor> LoadModels()
+    internal static ModelManifestEnvelope LoadModelManifest()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Resources", "ModelManifest.json");
         if (!File.Exists(path))
         {
-            return [];
+            return new ModelManifestEnvelope();
         }
 
-        var envelope = JsonSerializer.Deserialize<ModelManifestEnvelope>(File.ReadAllText(path), JsonOptions);
-        return envelope?.Models ?? [];
+        return JsonSerializer.Deserialize<ModelManifestEnvelope>(File.ReadAllText(path), JsonOptions)
+            ?? new ModelManifestEnvelope();
     }
 
-    internal static CapabilityManifest LoadCapabilities()
+    internal static CapabilityManifest LoadCapabilityManifest()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "Resources", "CapabilityManifest.json");
         if (!File.Exists(path))

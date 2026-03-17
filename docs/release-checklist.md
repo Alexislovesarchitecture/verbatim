@@ -15,7 +15,9 @@
 
 ## Windows shell
 
-- `pwsh -File Shells/windows/scripts/build.ps1`
+- `.\scripts\build_host_shell.ps1`
+- `.\scripts\run_host_app.ps1`
+- packaged artifacts are staged under `Shells/windows/Verbatim.Windows.Package/AppPackages/`
 - shell launches and loads the Rust bridge
 - unsupported providers/features remain visible with reasons
 

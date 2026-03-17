@@ -20,25 +20,26 @@ Verbatim is one desktop product with a shared Rust engine and native shells per 
 
 ## Host workflow
 
-Build the current host app bundle:
+Windows uses the packaged PowerShell wrappers as the primary development flow:
+
+```powershell
+.\scripts\build_host_shell.ps1
+.\scripts\run_host_app.ps1
+.\scripts\install_host_app.ps1
+```
+
+macOS and Linux use the host-aware shell wrappers:
 
 ```bash
 ./scripts/build_host_shell.sh
-```
-
-Run the current host app:
-
-```bash
 ./scripts/run_host_app.sh
-```
-
-Install the current host app:
-
-```bash
 ./scripts/install_host_app.sh
 ```
 
 On macOS, the packaged app bundle is staged at `dist/Verbatim.app`.
+On Windows, packaged artifacts are staged under `Shells/windows/Verbatim.Windows.Package/AppPackages/`.
+
+Shared shell manifests now live in `SharedAssets/` and are consumed by each shell from there.
 
 ## Reference shell
 

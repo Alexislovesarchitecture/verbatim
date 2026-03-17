@@ -1,0 +1,16 @@
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.csproj.AssemblyReference.cache
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.AssemblyInfoInputs.cache
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.AssemblyInfo.cs
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.csproj.CoreCompileInputs.cache
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.sourcelink.json
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\bin\Debug\net10.0\Verbatim.Service.deps.json
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\bin\Debug\net10.0\Verbatim.Service.dll
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\bin\Debug\net10.0\Verbatim.Service.pdb
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\bin\Debug\net10.0\Verbatim.Contracts.dll
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\bin\Debug\net10.0\Verbatim.Contracts.pdb
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.20050393.Up2Date
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.dll
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\refint\Verbatim.Service.dll
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\Verbatim.Service.pdb
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Service\obj\Debug\net10.0\ref\Verbatim.Service.dll

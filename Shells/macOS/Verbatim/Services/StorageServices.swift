@@ -14,9 +14,35 @@ private struct CapabilityManifestEnvelope: Codable {
     var features: [FeatureCapabilityDescriptor]
 }
 
+private enum SharedAssetLocator {
+    static func json(named name: String) -> URL? {
+        if let bundledURL = VerbatimBundle.current.url(forResource: name, withExtension: "json") {
+            return bundledURL
+        }
+
+        var candidateRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath, isDirectory: true)
+        for _ in 0 ..< 8 {
+            let candidate = candidateRoot
+                .appendingPathComponent("SharedAssets", isDirectory: true)
+                .appendingPathComponent("\(name).json", isDirectory: false)
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+
+            let parent = candidateRoot.deletingLastPathComponent()
+            if parent.path == candidateRoot.path {
+                break
+            }
+            candidateRoot = parent
+        }
+
+        return nil
+    }
+}
+
 enum ModelManifestRepository {
     static func load() -> [ModelDescriptor] {
-        guard let url = VerbatimBundle.current.url(forResource: "ModelManifest", withExtension: "json"),
+        guard let url = SharedAssetLocator.json(named: "ModelManifest"),
               let data = try? Data(contentsOf: url),
               let envelope = try? JSONDecoder().decode(ModelManifestEnvelope.self, from: data) else {
             return []
@@ -27,7 +53,7 @@ enum ModelManifestRepository {
 
 enum CapabilityManifestRepository {
     static func load() -> CapabilityManifest {
-        guard let url = VerbatimBundle.current.url(forResource: "CapabilityManifest", withExtension: "json"),
+        guard let url = SharedAssetLocator.json(named: "CapabilityManifest"),
               let data = try? Data(contentsOf: url),
               let envelope = try? JSONDecoder().decode(CapabilityManifestEnvelope.self, from: data) else {
             return CapabilityManifest(providers: [], features: [])

@@ -6,24 +6,63 @@
     <RootNamespace>Verbatim.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <UseWinUI>true</UseWinUI>
-    <EnableMsixTooling>false</EnableMsixTooling>
+    <EnableMsixTooling>true</EnableMsixTooling>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <UseRidGraph>true</UseRidGraph>
+    <PublishProfile>win-$(Platform).pubxml</PublishProfile>
+    <VerbatimRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..'))</VerbatimRepoRoot>
+    <VerbatimLowerConfiguration>$([System.String]::Copy('$(Configuration)').ToLowerInvariant())</VerbatimLowerConfiguration>
+    <VerbatimRustTargetDir>$(VerbatimRepoRoot)RustCore\target\$(VerbatimLowerConfiguration)\</VerbatimRustTargetDir>
+    <SkipVerbatimCoreStage Condition="'$(SkipVerbatimCoreStage)' == ''">false</SkipVerbatimCoreStage>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.6.250205002" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.*" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.8" />
     <PackageReference Include="NAudio" Version="2.2.1" />
     <PackageReference Include="SharpCompress" Version="0.38.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\macOS\Verbatim\Resources\CapabilityManifest.json" Link="Resources\CapabilityManifest.json">
+    <Content Include="..\..\..\SharedAssets\CapabilityManifest.json" Link="Resources\CapabilityManifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
-    <Content Include="..\..\macOS\Verbatim\Resources\ModelManifest.json" Link="Resources\ModelManifest.json">
+    <Content Include="..\..\..\SharedAssets\ModelManifest.json" Link="Resources\ModelManifest.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </Content>
+    <Content Include="Assets\LockScreenLogo.scale-200.png" />
+    <Content Include="Assets\SplashScreen.scale-200.png" />
+    <Content Include="Assets\Square150x150Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.scale-200.png" />
+    <Content Include="Assets\Square44x44Logo.targetsize-24_altform-unplated.png" />
+    <Content Include="Assets\StoreLogo.png" />
+    <Content Include="Assets\Wide310x150Logo.scale-200.png" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)' != 'true' and '$(EnableMsixTooling)' == 'true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+
+  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)' != 'true' and '$(EnableMsixTooling)' == 'true'">
+    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+  </PropertyGroup>
+
+  <Target Name="StageVerbatimCoreFfi" AfterTargets="Build;Publish" Condition="'$(DesignTimeBuild)' != 'true' and '$(SkipVerbatimCoreStage)' != 'true'">
+    <Error Condition="!Exists('$(VerbatimRustTargetDir)verbatim_core_ffi.dll')" Text="Missing Rust bridge output at $(VerbatimRustTargetDir)verbatim_core_ffi.dll. Run the Windows build script so cargo builds verbatim_core_ffi first." />
+    <Copy SourceFiles="$(VerbatimRustTargetDir)verbatim_core_ffi.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy Condition="Exists('$(VerbatimRustTargetDir)verbatim_core_ffi.pdb')" SourceFiles="$(VerbatimRustTargetDir)verbatim_core_ffi.pdb" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+    <Copy Condition="'$(PublishDir)' != ''" SourceFiles="$(VerbatimRustTargetDir)verbatim_core_ffi.dll" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+    <Copy Condition="'$(PublishDir)' != '' and Exists('$(VerbatimRustTargetDir)verbatim_core_ffi.pdb')" SourceFiles="$(VerbatimRustTargetDir)verbatim_core_ffi.pdb" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

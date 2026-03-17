@@ -1,0 +1,2 @@
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Windows.Package\Verbatim.Windows.Package.csproj;x64
+C:\Users\alexi\Documents\GitHub\verbatim\Windows\Verbatim.Windows.Shell\Verbatim.Windows.Shell.csproj;x64

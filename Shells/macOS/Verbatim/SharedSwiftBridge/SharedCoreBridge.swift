@@ -517,19 +517,19 @@ final class SharedCoreBridge: SharedCoreBridgeProtocol {
         }
         #if SWIFT_PACKAGE
         if let resourceURL = Bundle.module.resourceURL {
-            urls.append(resourceURL.appendingPathComponent("RustRuntime/libverbatim_core.dylib"))
+            urls.append(resourceURL.appendingPathComponent("RustRuntime/libverbatim_core_ffi.dylib"))
         }
         #else
         if let resourceURL = Bundle.main.resourceURL {
-            urls.append(resourceURL.appendingPathComponent("libverbatim_core.dylib"))
-            urls.append(resourceURL.appendingPathComponent("RustRuntime/libverbatim_core.dylib"))
+            urls.append(resourceURL.appendingPathComponent("libverbatim_core_ffi.dylib"))
+            urls.append(resourceURL.appendingPathComponent("RustRuntime/libverbatim_core_ffi.dylib"))
         }
         #endif
         let repoRoot = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        urls.append(repoRoot.appendingPathComponent("Shells/macOS/Verbatim/RustRuntime/libverbatim_core.dylib"))
-        urls.append(repoRoot.appendingPathComponent("RustCore/dist/libverbatim_core.dylib"))
-        urls.append(repoRoot.appendingPathComponent("RustCore/target/debug/libverbatim_core.dylib"))
-        urls.append(repoRoot.appendingPathComponent("RustCore/target/release/libverbatim_core.dylib"))
+        urls.append(repoRoot.appendingPathComponent("Shells/macOS/Verbatim/RustRuntime/libverbatim_core_ffi.dylib"))
+        urls.append(repoRoot.appendingPathComponent("RustCore/dist/libverbatim_core_ffi.dylib"))
+        urls.append(repoRoot.appendingPathComponent("RustCore/target/debug/libverbatim_core_ffi.dylib"))
+        urls.append(repoRoot.appendingPathComponent("RustCore/target/release/libverbatim_core_ffi.dylib"))
         return urls
     }
 

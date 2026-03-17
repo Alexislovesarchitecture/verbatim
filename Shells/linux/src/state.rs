@@ -21,11 +21,11 @@ impl LinuxShellState {
         let _ = paths.ensure_directories_exist();
         let settings = load_settings(&paths);
         let capability_manifest: contract::CapabilityManifest = serde_json::from_str(include_str!(
-            "../../macOS/Verbatim/Resources/CapabilityManifest.json"
+            "../../SharedAssets/CapabilityManifest.json"
         ))
         .expect("capability manifest must decode");
         let model_manifest: ModelManifestEnvelope = serde_json::from_str(include_str!(
-            "../../macOS/Verbatim/Resources/ModelManifest.json"
+            "../../SharedAssets/ModelManifest.json"
         ))
         .expect("model manifest must decode");
         ensure_history_schema(&paths);

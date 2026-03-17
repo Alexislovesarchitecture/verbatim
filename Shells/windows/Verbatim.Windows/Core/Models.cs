@@ -564,3 +564,250 @@ internal sealed class HistorySectionsRequest
     [JsonPropertyName("utcOffsetSeconds")]
     public int UtcOffsetSeconds { get; set; }
 }
+
+internal sealed class EmptyResponse
+{
+}
+
+internal static class TriggerModes
+{
+    internal const string Hold = "hold";
+    internal const string Toggle = "toggle";
+    internal const string DoubleTapLock = "double_tap_lock";
+}
+
+internal static class InputEvents
+{
+    internal const string TriggerDown = "trigger_down";
+    internal const string TriggerUp = "trigger_up";
+    internal const string TriggerToggle = "trigger_toggle";
+}
+
+internal static class DictationActions
+{
+    internal const string None = "none";
+    internal const string StartRecording = "start_recording";
+    internal const string StopRecording = "stop_recording";
+    internal const string CancelRecording = "cancel_recording";
+}
+
+internal static class HotkeyBackends
+{
+    internal const string EventMonitor = "event_monitor";
+    internal const string FunctionKeySpecialCase = "function_key_special_case";
+    internal const string Fallback = "fallback";
+    internal const string Unavailable = "unavailable";
+}
+
+internal static class StyleCategories
+{
+    internal const string PersonalMessages = "personal_messages";
+    internal const string WorkMessages = "work_messages";
+    internal const string Email = "email";
+    internal const string Other = "other";
+}
+
+internal static class StylePresets
+{
+    internal const string Formal = "formal";
+    internal const string Casual = "casual";
+    internal const string Enthusiastic = "enthusiastic";
+    internal const string VeryCasual = "very_casual";
+}
+
+internal static class StyleDecisionSources
+{
+    internal const string FocusedField = "focused_field";
+    internal const string WindowTitle = "window_title";
+    internal const string BundleId = "bundle_id";
+    internal const string Fallback = "fallback";
+}
+
+internal sealed class PrepareTriggerRequest
+{
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = TriggerModes.Hold;
+}
+
+internal sealed class HotkeyStartResultPayload
+{
+    [JsonPropertyName("backend")]
+    public string Backend { get; set; } = HotkeyBackends.Unavailable;
+
+    [JsonPropertyName("effectiveTriggerLabel")]
+    public string EffectiveTriggerLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("originalTriggerLabel")]
+    public string OriginalTriggerLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("fallbackWasUsed")]
+    public bool FallbackWasUsed { get; set; }
+
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+
+    [JsonPropertyName("recommendedFallbackLabel")]
+    public string? RecommendedFallbackLabel { get; set; }
+
+    [JsonPropertyName("permissionGranted")]
+    public bool PermissionGranted { get; set; }
+
+    [JsonPropertyName("isActive")]
+    public bool IsActive { get; set; }
+}
+
+internal sealed class SummarizeTriggerStateRequest
+{
+    [JsonPropertyName("mode")]
+    public string Mode { get; set; } = TriggerModes.Hold;
+
+    [JsonPropertyName("startResult")]
+    public HotkeyStartResultPayload StartResult { get; set; } = new();
+}
+
+internal sealed class TriggerStateSummary
+{
+    [JsonPropertyName("statusMessage")]
+    public string StatusMessage { get; set; } = string.Empty;
+
+    [JsonPropertyName("effectiveTriggerLabel")]
+    public string EffectiveTriggerLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("backendLabel")]
+    public string BackendLabel { get; set; } = string.Empty;
+
+    [JsonPropertyName("fallbackReason")]
+    public string? FallbackReason { get; set; }
+
+    [JsonPropertyName("isAvailable")]
+    public bool IsAvailable { get; set; }
+}
+
+internal sealed class HandleInputEventRequest
+{
+    [JsonPropertyName("event")]
+    public string Event { get; set; } = InputEvents.TriggerDown;
+
+    [JsonPropertyName("isRecording")]
+    public bool IsRecording { get; set; }
+
+    [JsonPropertyName("timestampMs")]
+    public long TimestampMs { get; set; }
+}
+
+internal sealed class HandleInputEventResponse
+{
+    [JsonPropertyName("action")]
+    public string Action { get; set; } = DictationActions.None;
+}
+
+internal sealed class ActiveAppContext
+{
+    [JsonPropertyName("appName")]
+    public string AppName { get; set; } = string.Empty;
+
+    [JsonPropertyName("bundleId")]
+    public string BundleId { get; set; } = string.Empty;
+
+    [JsonPropertyName("processIdentifier")]
+    public int? ProcessIdentifier { get; set; }
+
+    [JsonPropertyName("styleCategory")]
+    public string StyleCategory { get; set; } = StyleCategories.Other;
+
+    [JsonPropertyName("windowTitle")]
+    public string? WindowTitle { get; set; }
+
+    [JsonPropertyName("focusedElementRole")]
+    public string? FocusedElementRole { get; set; }
+
+    [JsonPropertyName("focusedElementSubrole")]
+    public string? FocusedElementSubrole { get; set; }
+
+    [JsonPropertyName("focusedElementTitle")]
+    public string? FocusedElementTitle { get; set; }
+
+    [JsonPropertyName("focusedElementPlaceholder")]
+    public string? FocusedElementPlaceholder { get; set; }
+
+    [JsonPropertyName("focusedElementDescription")]
+    public string? FocusedElementDescription { get; set; }
+
+    [JsonPropertyName("focusedValueSnippet")]
+    public string? FocusedValueSnippet { get; set; }
+}
+
+internal sealed class ResolveStyleContextRequest
+{
+    [JsonPropertyName("context")]
+    public ActiveAppContext Context { get; set; } = new();
+
+    [JsonPropertyName("settings")]
+    public StyleSettings Settings { get; set; } = new();
+}
+
+internal sealed class StyleDecisionReport
+{
+    [JsonPropertyName("category")]
+    public string Category { get; set; } = StyleCategories.Other;
+
+    [JsonPropertyName("preset")]
+    public string Preset { get; set; } = StylePresets.Casual;
+
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = StyleDecisionSources.Fallback;
+
+    [JsonPropertyName("confidence")]
+    public double Confidence { get; set; }
+
+    [JsonPropertyName("formattingEnabled")]
+    public bool FormattingEnabled { get; set; }
+
+    [JsonPropertyName("reason")]
+    public string? Reason { get; set; }
+
+    [JsonPropertyName("outputPreview")]
+    public string? OutputPreview { get; set; }
+}
+
+internal sealed class DictionaryEntryInput
+{
+    [JsonPropertyName("phrase")]
+    public string Phrase { get; set; } = string.Empty;
+
+    [JsonPropertyName("hint")]
+    public string Hint { get; set; } = string.Empty;
+}
+
+internal sealed class ProcessTranscriptRequest
+{
+    [JsonPropertyName("text")]
+    public string Text { get; set; } = string.Empty;
+
+    [JsonPropertyName("context")]
+    public ActiveAppContext? Context { get; set; }
+
+    [JsonPropertyName("settings")]
+    public StyleSettings Settings { get; set; } = new();
+
+    [JsonPropertyName("resolvedDecision")]
+    public StyleDecisionReport? ResolvedDecision { get; set; }
+
+    [JsonPropertyName("dictionaryEntries")]
+    public List<DictionaryEntryInput> DictionaryEntries { get; set; } = [];
+}
+
+internal sealed class ProcessTranscriptResponse
+{
+    [JsonPropertyName("cleanedText")]
+    public string CleanedText { get; set; } = string.Empty;
+
+    [JsonPropertyName("finalText")]
+    public string FinalText { get; set; } = string.Empty;
+
+    [JsonPropertyName("changed")]
+    public bool Changed { get; set; }
+
+    [JsonPropertyName("decision")]
+    public StyleDecisionReport Decision { get; set; } = new();
+}

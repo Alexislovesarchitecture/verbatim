@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Verbatim.Windows (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Verbatim.Windows (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}

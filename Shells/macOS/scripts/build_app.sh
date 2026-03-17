@@ -10,6 +10,7 @@ bundle_id="AVA.VERBATIM-SWIFTPM-DEV"
 dist_root="$repo_root/dist"
 app_bundle="$dist_root/${app_name}.app"
 bin_path="$(swift build --show-bin-path)"
+shared_assets_root="$repo_root/SharedAssets"
 
 reset_permissions=0
 
@@ -56,6 +57,12 @@ done < <(find "$bin_path" -maxdepth 1 -type d -name "*.bundle" | sort)
 while IFS= read -r framework; do
   ditto --noextattr --noqtn "$framework" "$app_bundle/Contents/Frameworks/$(basename "$framework")"
 done < <(find "$bin_path" -maxdepth 1 -type d -name "*.framework" | sort)
+
+for asset in CapabilityManifest.json ModelManifest.json; do
+  if [[ -f "$shared_assets_root/$asset" ]]; then
+    cp "$shared_assets_root/$asset" "$app_bundle/Contents/Resources/$asset"
+  fi
+done
 
 install_name_tool -add_rpath "@executable_path/../Frameworks" "$app_bundle/Contents/MacOS/$app_name"
 

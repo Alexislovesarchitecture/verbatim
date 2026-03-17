@@ -20,7 +20,8 @@ tmp/
 .DS_Store
 RustCore/target/
 RustCore/dist/
-Shells/macOS/Verbatim/RustRuntime/libverbatim_core.dylib
+Shells/macOS/Verbatim/RustRuntime/libverbatim_core_ffi.dylib
 Shells/linux/target/
 Shells/windows/**/bin/
 Shells/windows/**/obj/
+Shells/windows/**/AppPackages/

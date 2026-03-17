@@ -221,4 +221,3 @@ public sealed partial class MainWindow : Window
 
     private sealed record SelectorOption(string Value, string Label);
 }
-}

@@ -1,96 +1,80 @@
 <Window
     x:Class="Verbatim.Windows.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    Title="Verbatim"
-    Width="1320"
-    Height="920">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ScrollViewer>
-        <Grid Padding="24" ColumnSpacing="18" RowSpacing="18">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-            </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="320" />
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="360" />
-            </Grid.ColumnDefinitions>
-
-            <StackPanel Grid.ColumnSpan="3" Spacing="4">
-                <TextBlock FontSize="30" FontWeight="SemiBold" Text="Verbatim" />
-                <TextBlock x:Name="StatusTextBlock" Opacity="0.78" Text="Loading Windows shell state..." TextWrapping="Wrap" />
+        <StackPanel Padding="24" Spacing="20">
+            <StackPanel Spacing="4">
+                <TextBlock FontSize="32" FontWeight="SemiBold" Text="Verbatim" />
+                <TextBlock x:Name="StatusTextBlock" Text="Loading Windows shell state..." TextWrapping="Wrap" />
             </StackPanel>
 
-            <Border Grid.Row="1" Padding="18" CornerRadius="16" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-                <StackPanel Spacing="12">
+            <Grid ColumnSpacing="24" RowSpacing="20">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Row="0" Grid.Column="0" Spacing="12">
                     <TextBlock FontSize="20" FontWeight="SemiBold" Text="Provider and Language" />
                     <TextBlock x:Name="ProviderDetailTextBlock" TextWrapping="Wrap" />
                     <ComboBox x:Name="ProviderComboBox" Header="Preferred provider" SelectionChanged="ProviderComboBox_SelectionChanged" />
                     <ComboBox x:Name="LanguageComboBox" Header="Language" SelectionChanged="LanguageComboBox_SelectionChanged" />
                     <TextBlock x:Name="SelectedProviderMessageTextBlock" TextWrapping="Wrap" />
                     <TextBlock x:Name="PermissionTextBlock" TextWrapping="Wrap" />
-                    <Button Content="Open Microphone Settings" Click="OpenPermissionSettingsButton_Click" />
-                    <Button Content="Refresh Status" Click="RefreshButton_Click" />
+                    <StackPanel Orientation="Horizontal" Spacing="12">
+                        <Button Content="Open Microphone Settings" Click="OpenPermissionSettingsButton_Click" />
+                        <Button Content="Refresh Status" Click="RefreshButton_Click" />
+                    </StackPanel>
                 </StackPanel>
-            </Border>
 
-            <Border Grid.Row="1" Grid.Column="1" Padding="18" CornerRadius="16" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-                <StackPanel Spacing="12">
+                <StackPanel Grid.Row="0" Grid.Column="1" Spacing="12">
                     <TextBlock FontSize="20" FontWeight="SemiBold" Text="Models and Runtime" />
-                    <Grid ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <ComboBox x:Name="WhisperModelComboBox" Header="Whisper model" SelectionChanged="WhisperModelComboBox_SelectionChanged" />
-                        <ComboBox x:Name="ParakeetModelComboBox" Grid.Column="1" Header="Parakeet model" SelectionChanged="ParakeetModelComboBox_SelectionChanged" />
-                    </Grid>
-                    <ProgressBar x:Name="ModelProgressBar" Minimum="0" Maximum="1" Height="10" Visibility="Collapsed" />
+                    <ComboBox x:Name="WhisperModelComboBox" Header="Whisper model" SelectionChanged="WhisperModelComboBox_SelectionChanged" />
+                    <ComboBox x:Name="ParakeetModelComboBox" Header="Parakeet model" SelectionChanged="ParakeetModelComboBox_SelectionChanged" />
+                    <ProgressBar x:Name="ModelProgressBar" Minimum="0" Maximum="1" Height="8" Visibility="Collapsed" />
                     <TextBlock x:Name="ModelProgressTextBlock" TextWrapping="Wrap" />
-                    <StackPanel Orientation="Horizontal" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="12">
                         <Button x:Name="InstallModelButton" Content="Install Selected Model" Click="InstallModelButton_Click" />
                         <Button Content="Copy Latest Transcript" Click="CopyLatestButton_Click" />
                         <Button x:Name="RecordButton" Content="Start Recording" Click="RecordButton_Click" />
                     </StackPanel>
-                    <ListView x:Name="ProviderSummaryListView" Height="220" />
-                    <ListView x:Name="RuntimeListView" Height="140" />
+                    <TextBlock FontWeight="SemiBold" Text="Providers" />
+                    <ListView x:Name="ProviderSummaryListView" MaxHeight="220" />
+                    <TextBlock FontWeight="SemiBold" Text="Runtime" />
+                    <ListView x:Name="RuntimeListView" MaxHeight="180" />
                 </StackPanel>
-            </Border>
 
-            <Border Grid.Row="1" Grid.Column="2" Padding="18" CornerRadius="16" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-                <StackPanel Spacing="12">
+                <StackPanel Grid.Row="1" Grid.Column="0" Spacing="12">
                     <TextBlock FontSize="20" FontWeight="SemiBold" Text="Diagnostics and Tips" />
-                    <ListView x:Name="DiagnosticsListView" Height="210" />
-                    <ListView x:Name="TipsListView" Height="170" />
+                    <TextBlock FontWeight="SemiBold" Text="Diagnostics" />
+                    <ListView x:Name="DiagnosticsListView" MaxHeight="220" />
+                    <TextBlock FontWeight="SemiBold" Text="Tips" />
+                    <ListView x:Name="TipsListView" MaxHeight="180" />
                     <TextBlock FontWeight="SemiBold" Text="Focused Context" />
                     <TextBlock x:Name="FocusTextBlock" TextWrapping="Wrap" />
                 </StackPanel>
-            </Border>
 
-            <Border Grid.Row="2" Padding="18" CornerRadius="16" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-                <StackPanel Spacing="12">
-                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="History" />
+                <StackPanel Grid.Row="1" Grid.Column="1" Spacing="12">
+                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="History and Dictionary" />
                     <TextBlock x:Name="PathsTextBlock" TextWrapping="Wrap" />
-                    <ListView x:Name="HistoryListView" Height="430" />
+                    <TextBlock FontWeight="SemiBold" Text="History" />
+                    <ListView x:Name="HistoryListView" MaxHeight="280" />
+                    <TextBlock FontWeight="SemiBold" Text="Dictionary" />
+                    <ListView x:Name="DictionaryListView" MaxHeight="220" />
                 </StackPanel>
-            </Border>
 
-            <Border Grid.Row="2" Grid.Column="1" Padding="18" CornerRadius="16" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-                <StackPanel Spacing="12">
-                    <TextBlock FontSize="20" FontWeight="SemiBold" Text="Dictionary" />
-                    <ListView x:Name="DictionaryListView" Height="430" />
-                </StackPanel>
-            </Border>
-
-            <Border Grid.Row="2" Grid.Column="2" Padding="18" CornerRadius="16" Background="{ThemeResource LayerOnAcrylicFillColorDefaultBrush}">
-                <StackPanel Spacing="12">
+                <StackPanel Grid.Row="2" Grid.ColumnSpan="2" Spacing="8">
                     <TextBlock FontSize="20" FontWeight="SemiBold" Text="Product Notes" />
-                    <TextBlock TextWrapping="Wrap" Text="Windows is a first-class Verbatim shell. Apple Speech remains selectable but unsupported here, Whisper is cross-platform, and Parakeet activates only when Windows and NVIDIA CUDA capability checks pass." />
-                    <TextBlock TextWrapping="Wrap" Text="The shell keeps provider-specific languages persistent, exposes install progress and runtime readiness, and relies on the shared Rust core for capability reduction, selection resolution, and deterministic transcript cleanup." />
+                    <TextBlock TextWrapping="Wrap" Text="Windows is the packaged WinUI shell for Verbatim. Apple Speech remains visible but unsupported here, Whisper stays cross-platform, and Parakeet activates only when Windows and NVIDIA CUDA capability checks pass." />
+                    <TextBlock TextWrapping="Wrap" Text="This phase keeps the Windows shell focused on a clean packaged workflow, shared-manifest loading, and the Rust core bridge. Hotkeys, focus capture, auto-paste, and runtime orchestration land after the packaged baseline is stable." />
                 </StackPanel>
-            </Border>
-        </Grid>
+            </Grid>
+        </StackPanel>
     </ScrollViewer>
 </Window>

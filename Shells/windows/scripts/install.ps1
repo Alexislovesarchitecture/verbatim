@@ -1,2 +1,12 @@
-$ErrorActionPreference = "Stop"
-Write-Host "Windows packaging/install flow is not automated yet. Build with Shells/windows/scripts/build.ps1 and package the generated WinUI desktop app."
+param(
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$ForwardedArgs
+)
+
+. (Join-Path $PSScriptRoot "common.ps1")
+
+$artifact = Invoke-WindowsShellBuild -Configuration "Debug" -Platform "x64" -ForwardedArgs $ForwardedArgs
+$registration = Register-WindowsShellPackage -Configuration "Debug" -Platform "x64"
+
+Write-Host "Prepared packaged Windows shell from $artifact"
+Write-Host "Registered packaged Verbatim app using $registration"

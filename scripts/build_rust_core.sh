@@ -22,12 +22,12 @@ fi
 
 cargo build --manifest-path "$crate_root/Cargo.toml" -p verbatim_core_ffi $profile_flag
 
-dylib_path="$crate_root/target/$profile/libverbatim_core.dylib"
+dylib_path="$crate_root/target/$profile/libverbatim_core_ffi.dylib"
 if [[ -f "$dylib_path" ]]; then
-  cp "$dylib_path" "$dist_root/libverbatim_core.dylib"
-  cp "$dylib_path" "$macos_runtime_root/libverbatim_core.dylib"
-  chmod u+w "$dist_root/libverbatim_core.dylib" "$macos_runtime_root/libverbatim_core.dylib"
-  xattr -cr "$dist_root/libverbatim_core.dylib" "$macos_runtime_root/libverbatim_core.dylib" 2>/dev/null || true
+  cp "$dylib_path" "$dist_root/libverbatim_core_ffi.dylib"
+  cp "$dylib_path" "$macos_runtime_root/libverbatim_core_ffi.dylib"
+  chmod u+w "$dist_root/libverbatim_core_ffi.dylib" "$macos_runtime_root/libverbatim_core_ffi.dylib"
+  xattr -cr "$dist_root/libverbatim_core_ffi.dylib" "$macos_runtime_root/libverbatim_core_ffi.dylib" 2>/dev/null || true
 fi
 
 header_path="$crate_root/include/verbatim_core.h"
