@@ -14,22 +14,16 @@ Verbatim is one desktop product with a shared Rust engine and native shells per 
 - `Shells/linux/`
   - GTK4/libadwaita native shell scaffold
 - `scripts/`
-  - host-aware build, test, run, and install entrypoints
+  - host-aware build, run, and install entrypoints
 - `docs/`
   - architecture, shell/core contract, parity notes, and release guidance
 
-## Host commands
+## Host workflow
 
-Build the current host shell:
+Build the current host app bundle:
 
 ```bash
 ./scripts/build_host_shell.sh
-```
-
-Test the current host shell:
-
-```bash
-./scripts/test_host_shell.sh
 ```
 
 Run the current host app:
@@ -43,6 +37,8 @@ Install the current host app:
 ```bash
 ./scripts/install_host_app.sh
 ```
+
+On macOS, the packaged app bundle is staged at `dist/Verbatim.app`.
 
 ## Reference shell
 

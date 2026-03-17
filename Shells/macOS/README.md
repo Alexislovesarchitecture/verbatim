@@ -5,17 +5,15 @@ Reference native shell for Verbatim.
 ## Build
 
 ```bash
-cd Shells/macOS
-swift build --product Verbatim
-swift test
+../../scripts/build_host_shell.sh
 ```
 
-## Developer app
+## App bundle
 
-Run the dev app bundle through the shell-local script:
+Run the app bundle through the shell-local script:
 
 ```bash
-./scripts/run_dev_app.sh
+./scripts/run_app.sh
 ```
 
 Or use the repo-level host wrapper:

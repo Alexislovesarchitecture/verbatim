@@ -6,7 +6,7 @@ platform="$(uname -s)"
 
 case "$platform" in
   Darwin)
-    exec "$repo_root/Shells/macOS/scripts/install_dev_app.sh" "$@"
+    exec "$repo_root/Shells/macOS/scripts/install_app.sh" "$@"
     ;;
   Linux)
     echo "Linux install packaging is not automated yet. Build with scripts/build_host_shell.sh and package from Shells/linux." >&2

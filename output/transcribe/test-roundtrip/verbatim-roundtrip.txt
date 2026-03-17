@@ -1,1 +1,0 @@
-Verbatim microphone round-trip test. Local app permissions are separate from transcription quality.

@@ -6,9 +6,7 @@ platform="$(uname -s)"
 
 case "$platform" in
   Darwin)
-    "$repo_root/scripts/build_rust_core.sh" "$@"
-    cd "$repo_root/Shells/macOS"
-    swift build --product Verbatim
+    exec "$repo_root/Shells/macOS/scripts/build_app.sh" "$@"
     ;;
   Linux)
     cargo build --manifest-path "$repo_root/Shells/linux/Cargo.toml" "$@"

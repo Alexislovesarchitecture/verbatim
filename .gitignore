@@ -4,9 +4,13 @@
 *.build/
 DerivedData/
 build/
+dist/
+output/
+tmp/
 *.xcuserstate
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
+.swiftpm/xcode/package.xcworkspace/xcuserdata/
 
 # SwiftPM artifacts and metadata (local machine)
 .build
@@ -14,8 +18,6 @@ build/
 
 # macOS
 .DS_Store
-tmp/DerivedData-*/
-tmp/*-dev.app/
 RustCore/target/
 RustCore/dist/
 Shells/macOS/Verbatim/RustRuntime/libverbatim_core.dylib

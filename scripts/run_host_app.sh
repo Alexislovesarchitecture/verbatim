@@ -6,7 +6,7 @@ platform="$(uname -s)"
 
 case "$platform" in
   Darwin)
-    exec "$repo_root/Shells/macOS/scripts/run_dev_app.sh" "$@"
+    exec "$repo_root/Shells/macOS/scripts/run_app.sh" "$@"
     ;;
   Linux)
     cargo run --manifest-path "$repo_root/Shells/linux/Cargo.toml" "$@"

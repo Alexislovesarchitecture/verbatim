@@ -8,9 +8,8 @@
 
 ## macOS shell
 
-- `cd Shells/macOS && swift test`
-- `cd Shells/macOS && swift build --product Verbatim`
-- dev app launches and finds bundled Rust runtime
+- `./scripts/build_host_shell.sh`
+- `dist/Verbatim.app` launches and finds bundled Rust runtime
 - Accessibility and microphone flows remain contextual
 - provider/model readiness is inline and actionable
 

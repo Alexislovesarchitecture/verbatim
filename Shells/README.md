@@ -19,8 +19,7 @@ Verbatim ships as one product with a shared Rust engine and native shells per op
 Use the root host-aware scripts:
 
 - `scripts/build_host_shell.sh`
-- `scripts/test_host_shell.sh`
 - `scripts/run_host_app.sh`
 - `scripts/install_host_app.sh`
 
-The macOS shell still provides shell-local developer scripts under `macOS/scripts/`.
+The macOS shell provides shell-local app scripts under `macOS/scripts/`.
